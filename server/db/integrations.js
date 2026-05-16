@@ -1,55 +1,74 @@
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
+const { Pool } = require('pg');
 
-function getDb() {
-  const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '../../data/autopilot.db');
-  return new sqlite3.Database(dbPath);
+let pool = null;
+
+function getPool() {
+  if (!pool) {
+    const connectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/orian';
+    pool = new Pool({
+      connectionString,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    });
+  }
+  return pool;
 }
 
-function saveIntegration(goalId, provider, data) {
-  return new Promise((resolve, reject) => {
-    const db = getDb();
-    const createdAt = new Date().toISOString();
-    db.run(
-      `INSERT OR REPLACE INTO integrations (goalId, provider, accessToken, refreshToken, metadata, createdAt)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [goalId, provider, data.accessToken, data.refreshToken || null, JSON.stringify(data.metadata || {}), createdAt],
-      (err) => { db.close(); if (err) reject(err); else resolve(); }
+async function saveIntegration(goalId, provider, data) {
+  const db = getPool();
+  const createdAt = new Date().toISOString();
+  try {
+    await db.query(
+      `INSERT INTO integrations ("goalId", provider, "accessToken", "refreshToken", metadata, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT ("goalId", provider) DO UPDATE SET
+       "accessToken" = $3, "refreshToken" = $4, metadata = $5, "createdAt" = $6`,
+      [goalId, provider, data.accessToken, data.refreshToken || null, JSON.stringify(data.metadata || {}), createdAt]
     );
-  });
+  } catch (err) {
+    console.error('[DB ERROR]', err.message);
+    throw err;
+  }
 }
 
-function getIntegration(goalId, provider) {
-  return new Promise((resolve, reject) => {
-    const db = getDb();
-    db.get(
-      'SELECT * FROM integrations WHERE goalId = ? AND provider = ? ORDER BY createdAt DESC LIMIT 1',
-      [goalId, provider],
-      (err, row) => { db.close(); if (err) reject(err); else resolve(row || null); }
+async function getIntegration(goalId, provider) {
+  const db = getPool();
+  try {
+    const result = await db.query(
+      'SELECT * FROM integrations WHERE "goalId" = $1 AND provider = $2 ORDER BY "createdAt" DESC LIMIT 1',
+      [goalId, provider]
     );
-  });
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('[DB ERROR]', err.message);
+    throw err;
+  }
 }
 
-function listIntegrations(goalId) {
-  return new Promise((resolve, reject) => {
-    const db = getDb();
-    db.all(
-      'SELECT provider, metadata, createdAt FROM integrations WHERE goalId = ?',
-      [goalId],
-      (err, rows) => { db.close(); if (err) reject(err); else resolve(rows || []); }
+async function listIntegrations(goalId) {
+  const db = getPool();
+  try {
+    const result = await db.query(
+      'SELECT provider, metadata, "createdAt" FROM integrations WHERE "goalId" = $1',
+      [goalId]
     );
-  });
+    return result.rows || [];
+  } catch (err) {
+    console.error('[DB ERROR]', err.message);
+    throw err;
+  }
 }
 
-function deleteIntegration(goalId, provider) {
-  return new Promise((resolve, reject) => {
-    const db = getDb();
-    db.run(
-      'DELETE FROM integrations WHERE goalId = ? AND provider = ?',
-      [goalId, provider],
-      (err) => { db.close(); if (err) reject(err); else resolve(); }
+async function deleteIntegration(goalId, provider) {
+  const db = getPool();
+  try {
+    await db.query(
+      'DELETE FROM integrations WHERE "goalId" = $1 AND provider = $2',
+      [goalId, provider]
     );
-  });
+  } catch (err) {
+    console.error('[DB ERROR]', err.message);
+    throw err;
+  }
 }
 
 module.exports = { saveIntegration, getIntegration, listIntegrations, deleteIntegration };
