@@ -114,9 +114,9 @@ async function createTables() {
         metadata JSONB,
         "createdAt" TIMESTAMP NOT NULL,
         UNIQUE("goalId", provider),
-        FOREIGN KEY ("goalId") REFERENCES goals(id) ON DELETE CASCADE
       )
     `);
+    await pool.query('ALTER TABLE integrations DROP CONSTRAINT IF EXISTS "integrations_goalId_fkey"');
 
     // Users table
     await pool.query(`

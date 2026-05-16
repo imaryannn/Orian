@@ -82,7 +82,10 @@ function Integrations({ token }) {
 
   useEffect(() => {
     fetchStatus();
-    const handler = (e) => { if (e.data?.type === 'oauth_success') fetchStatus(); };
+    const handler = (e) => {
+      if (e.data?.type === 'oauth_success') fetchStatus();
+      if (e.data?.type === 'oauth_error') console.error('[OAUTH ERROR]', e.data.error);
+    };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
   }, [fetchStatus]);
