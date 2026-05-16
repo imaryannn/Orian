@@ -15,6 +15,7 @@ Orian is a multi-agent automation app. A user submits a goal, and the backend pl
 - Data: PostgreSQL
 - Queue: Redis/Upstash
 - AI/search: Groq, Tavily
+- Observability: Omium tracing
 - Integrations: Notion, Slack, Google, GitHub, Linear, Discord, Airtable, webhooks
 
 ## Project Structure
@@ -67,6 +68,8 @@ FRONTEND_URL=https://oriannn.vercel.app
 GROQ_API_KEY=
 TAVILY_API_KEY=
 JWT_SECRET=
+OMIUM_API_KEY=
+OMIUM_PROJECT=orian
 ```
 
 Optional integration variables:
@@ -167,4 +170,5 @@ GET  /integrations/list
 - Generated report files are written by the backend file agent and tracked in PostgreSQL.
 - Background tasks are processed through BullMQ and Redis.
 - Socket.io sends live task progress, completion, and error events to the frontend.
+- Omium tracing is used to track workflow execution, agent spans, duration, and error states for debugging and observability.
 - Keep secrets out of git. Rotate any key that has been pasted into chat, logs, screenshots, or public issues.
