@@ -31,6 +31,12 @@ function popupError(error) {
   </script></body></html>`;
 }
 
+function getRedirectUri(envName) {
+  const uri = process.env[envName];
+  if (!uri) return uri;
+  return uri.replace(/^http:\/\/([^.]+\.onrender\.com)/, 'https://$1');
+}
+
 router.get('/integrations/list', requireAuth, async (req, res) => {
   const integrations = await listIntegrations(req.user.userId);
   res.json({ integrations });
@@ -53,7 +59,7 @@ router.get('/auth/notion', requireAuth, (req, res) => {
     client_id: process.env.NOTION_CLIENT_ID,
     response_type: 'code',
     owner: 'user',
-    redirect_uri: process.env.NOTION_REDIRECT_URI,
+    redirect_uri: getRedirectUri('NOTION_REDIRECT_URI'),
     state: req.user.userId,
   });
   res.redirect(`https://api.notion.com/v1/oauth/authorize?${params}`);
@@ -64,7 +70,7 @@ router.get('/auth/notion/callback', async (req, res) => {
   if (error) return res.send(popupError(error));
   try {
     const credentials = Buffer.from(`${process.env.NOTION_CLIENT_ID}:${process.env.NOTION_CLIENT_SECRET}`).toString('base64');
-    const payload = JSON.stringify({ grant_type: 'authorization_code', code, redirect_uri: process.env.NOTION_REDIRECT_URI });
+    const payload = JSON.stringify({ grant_type: 'authorization_code', code, redirect_uri: getRedirectUri('NOTION_REDIRECT_URI') });
     const data = await oauthRequest({
       hostname: 'api.notion.com', path: '/v1/oauth/token', method: 'POST',
       headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), 'Notion-Version': '2022-06-28' },
@@ -81,7 +87,7 @@ router.get('/auth/slack', requireAuth, (req, res) => {
   const params = new URLSearchParams({
     client_id: process.env.SLACK_CLIENT_ID,
     scope: 'chat:write,channels:read,files:write,incoming-webhook',
-    redirect_uri: process.env.SLACK_REDIRECT_URI,
+    redirect_uri: getRedirectUri('SLACK_REDIRECT_URI'),
     state: req.user.userId,
   });
   res.redirect(`https://slack.com/oauth/v2/authorize?${params}`);
@@ -91,7 +97,7 @@ router.get('/auth/slack/callback', async (req, res) => {
   const { code, state: userId, error } = req.query;
   if (error) return res.send(popupError(error));
   try {
-    const params = new URLSearchParams({ client_id: process.env.SLACK_CLIENT_ID, client_secret: process.env.SLACK_CLIENT_SECRET, code, redirect_uri: process.env.SLACK_REDIRECT_URI });
+    const params = new URLSearchParams({ client_id: process.env.SLACK_CLIENT_ID, client_secret: process.env.SLACK_CLIENT_SECRET, code, redirect_uri: getRedirectUri('SLACK_REDIRECT_URI') });
     const data = await oauthRequest({ hostname: 'slack.com', path: `/api/oauth.v2.access?${params}`, method: 'GET' });
     if (!data.ok) return res.send(popupError(data.error));
     await saveIntegration(userId, 'slack', { accessToken: data.access_token, metadata: { teamId: data.team?.id, teamName: data.team?.name, webhookUrl: data.incoming_webhook?.url } });
@@ -104,7 +110,7 @@ router.get('/auth/slack/callback', async (req, res) => {
 router.get('/auth/google', requireAuth, (req, res) => {
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID,
-    redirect_uri: process.env.GOOGLE_REDIRECT_URI,
+    redirect_uri: getRedirectUri('GOOGLE_REDIRECT_URI'),
     response_type: 'code',
     scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents',
     access_type: 'offline',
@@ -118,7 +124,7 @@ router.get('/auth/google/callback', async (req, res) => {
   const { code, state: userId, error } = req.query;
   if (error) return res.send(popupError(error));
   try {
-    const payload = new URLSearchParams({ code, client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET, redirect_uri: process.env.GOOGLE_REDIRECT_URI, grant_type: 'authorization_code' }).toString();
+    const payload = new URLSearchParams({ code, client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET, redirect_uri: getRedirectUri('GOOGLE_REDIRECT_URI'), grant_type: 'authorization_code' }).toString();
     const data = await oauthRequest({
       hostname: 'oauth2.googleapis.com', path: '/token', method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(payload) },
@@ -134,7 +140,7 @@ router.get('/auth/google/callback', async (req, res) => {
 router.get('/auth/github', requireAuth, (req, res) => {
   const params = new URLSearchParams({
     client_id: process.env.GITHUB_CLIENT_ID,
-    redirect_uri: process.env.GITHUB_REDIRECT_URI,
+    redirect_uri: getRedirectUri('GITHUB_REDIRECT_URI'),
     scope: 'repo,gist',
     state: req.user.userId,
   });
@@ -145,7 +151,7 @@ router.get('/auth/github/callback', async (req, res) => {
   const { code, state: userId, error } = req.query;
   if (error) return res.send(popupError(error));
   try {
-    const payload = JSON.stringify({ client_id: process.env.GITHUB_CLIENT_ID, client_secret: process.env.GITHUB_CLIENT_SECRET, code, redirect_uri: process.env.GITHUB_REDIRECT_URI });
+    const payload = JSON.stringify({ client_id: process.env.GITHUB_CLIENT_ID, client_secret: process.env.GITHUB_CLIENT_SECRET, code, redirect_uri: getRedirectUri('GITHUB_REDIRECT_URI') });
     const data = await oauthRequest({
       hostname: 'github.com', path: '/login/oauth/access_token', method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
@@ -161,7 +167,7 @@ router.get('/auth/github/callback', async (req, res) => {
 router.get('/auth/linear', requireAuth, (req, res) => {
   const params = new URLSearchParams({
     client_id: process.env.LINEAR_CLIENT_ID,
-    redirect_uri: process.env.LINEAR_REDIRECT_URI,
+    redirect_uri: getRedirectUri('LINEAR_REDIRECT_URI'),
     response_type: 'code',
     scope: 'read,write',
     state: req.user.userId,
@@ -173,7 +179,7 @@ router.get('/auth/linear/callback', async (req, res) => {
   const { code, state: userId, error } = req.query;
   if (error) return res.send(popupError(error));
   try {
-    const payload = JSON.stringify({ client_id: process.env.LINEAR_CLIENT_ID, client_secret: process.env.LINEAR_CLIENT_SECRET, code, redirect_uri: process.env.LINEAR_REDIRECT_URI, grant_type: 'authorization_code' });
+    const payload = JSON.stringify({ client_id: process.env.LINEAR_CLIENT_ID, client_secret: process.env.LINEAR_CLIENT_SECRET, code, redirect_uri: getRedirectUri('LINEAR_REDIRECT_URI'), grant_type: 'authorization_code' });
     const data = await oauthRequest({
       hostname: 'api.linear.app', path: '/oauth/token', method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
