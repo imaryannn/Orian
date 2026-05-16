@@ -113,7 +113,7 @@ async function createTables() {
         "refreshToken" TEXT,
         metadata JSONB,
         "createdAt" TIMESTAMP NOT NULL,
-        UNIQUE("goalId", provider),
+        UNIQUE("goalId", provider)
       )
     `);
     await pool.query('ALTER TABLE integrations DROP CONSTRAINT IF EXISTS "integrations_goalId_fkey"');
