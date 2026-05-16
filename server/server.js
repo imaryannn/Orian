@@ -13,6 +13,21 @@ const cors = require('cors');
 // Load environment variables
 dotenv.config();
 
+function logStartupError(label, error) {
+  const message = error && error.stack ? error.stack : error && error.message ? error.message : String(error);
+  console.error(`[${label}]`, message);
+}
+
+process.on('uncaughtException', (error) => {
+  logStartupError('UNCAUGHT EXCEPTION', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logStartupError('UNHANDLED REJECTION', reason);
+  process.exit(1);
+});
+
 // Import custom modules
 const { initializeDatabase } = require('./db/sqlite');
 const { setupSocket } = require('./sockets/socket');
