@@ -42,12 +42,29 @@ const { router: orianApiRoutes, initializeApiRoutes } = require('./src/routes/ap
 // Initialize Express app
 const app = express();
 const server = http.createServer(app);
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'https://oriannn.vercel.app',
+  'http://localhost:3000',
+].filter(Boolean);
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error(`CORS blocked origin: ${origin}`));
+  },
+  credentials: true,
+};
 
 // Initialize Socket.io
 const io = socketIO(server, {
   cors: {
-    origin: '*',
+    origin: allowedOrigins,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
@@ -60,7 +77,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Enable CORS for all routes
-app.use(cors());
+app.use(cors(corsOptions));
 
 // Log all incoming requests
 app.use((req, res, next) => {
