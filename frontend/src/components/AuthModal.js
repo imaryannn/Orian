@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import './AuthModal.css';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:3000';
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://orian-ondq.onrender.com';
 
 function AuthModal({ onAuth }) {
   const [mode, setMode] = useState('login');
