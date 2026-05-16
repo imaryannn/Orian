@@ -89,7 +89,7 @@ function App() {
     socket.on('task_error', (data) => {
       if (data.goalId !== activeTaskRef.current) return;
       setTasks(prev => prev.map(t => t.id === activeTaskRef.current ? { ...t, status: 'failed' } : t));
-      setToast('something went wrong. please try again.');
+      setToast(data.error || 'something went wrong. please try again.');
       setView('input');
     });
 
@@ -104,7 +104,7 @@ function App() {
     socket.on('workflow-error', (data) => {
       if (data.goalId !== activeTaskRef.current) return;
       setTasks(prev => prev.map(t => t.id === activeTaskRef.current ? { ...t, status: 'failed' } : t));
-      setToast('something went wrong. please try again.');
+      setToast(data.error || 'something went wrong. please try again.');
       setView('input');
     });
 
