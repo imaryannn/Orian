@@ -1,7 +1,7 @@
 // ============================================
 // ORIAN - Main Server Entry Point
 // ============================================
-// Purpose: Initialize Express, Socket.io, Redis, SQLite
+// Purpose: Initialize Express, Socket.io, Redis, PostgreSQL
 // and orchestrate the entire autonomous agent system
 
 const express = require('express');
@@ -156,18 +156,18 @@ async function initializeSystem() {
     console.log('\n========== ORIAN INITIALIZATION ==========\n');
     console.log('[BOOT] Queue reliability patch loaded');
 
-    // 1. Initialize SQLite database
-    console.log('[DB] Initializing SQLite database...');
+    // 1. Initialize PostgreSQL database
+    console.log('[DB] Initializing PostgreSQL database...');
     await initializeDatabase();
     await initializeApiRoutes();
-    console.log('[DB] ✓ SQLite database initialized successfully');
+    console.log('[DB] PostgreSQL database initialized successfully');
 
     // 2. Initialize Redis connection for BullMQ
     console.log('[REDIS] Connecting to Redis...');
     await initializeRedis();
     console.log('[REDIS] ✓ Redis connection established');
 
-    // Reconcile goals that were saved to SQLite but are missing from Redis.
+    // Reconcile goals that were saved to PostgreSQL but are missing from Redis.
     await requeuePendingGoals();
 
     // 3. Verify environment variables
@@ -204,13 +204,13 @@ async function initializeSystem() {
 
     console.log('\n========== INITIALIZATION COMPLETE ==========\n');
   } catch (error) {
-    console.error('[FATAL ERROR]', error.message);
+    console.error('[FATAL ERROR]', error && error.message ? error.message : String(error));
     process.exit(1);
   }
 }
 
 /**
- * Re-enqueue SQLite goals that are still marked queued.
+ * Re-enqueue PostgreSQL goals that are still marked queued.
  * This protects against Redis jobs disappearing while the DB source of truth remains queued.
  */
 async function requeuePendingGoals() {
@@ -219,11 +219,11 @@ async function requeuePendingGoals() {
   const queuedGoals = await getTasksByStatus('queued');
 
   if (queuedGoals.length === 0) {
-    console.log('[QUEUE] No pending SQLite goals to reconcile');
+    console.log('[QUEUE] No pending PostgreSQL goals to reconcile');
     return;
   }
 
-  console.log(`[QUEUE] Reconciling ${queuedGoals.length} queued SQLite goal(s)...`);
+  console.log(`[QUEUE] Reconciling ${queuedGoals.length} queued PostgreSQL goal(s)...`);
 
   for (const queuedGoal of queuedGoals) {
     if (queuedGoal.status === 'cancelled') continue;

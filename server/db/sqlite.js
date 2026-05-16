@@ -8,11 +8,27 @@ const { Pool } = require('pg');
 // Database pool
 let pool = null;
 
+function getConnectionString() {
+  const connectionString = process.env.DATABASE_URL;
+
+  if (!connectionString && process.env.NODE_ENV === 'production') {
+    throw new Error('DATABASE_URL is missing. Add a PostgreSQL database on Render and set DATABASE_URL to its Internal Database URL.');
+  }
+
+  return connectionString || 'postgresql://localhost:5432/orian';
+}
+
+function formatDbError(error) {
+  if (error && error.message) return error.message;
+  if (error && error.code) return `PostgreSQL error code: ${error.code}`;
+  return String(error);
+}
+
 /**
  * Initialize PostgreSQL database and create tables if needed
  */
 async function initializeDatabase() {
-  const connectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/orian';
+  const connectionString = getConnectionString();
   
   pool = new Pool({
     connectionString,
@@ -35,7 +51,7 @@ async function initializeDatabase() {
     
     return;
   } catch (error) {
-    console.error('[DB ERROR]', error.message);
+    console.error('[DB ERROR]', formatDbError(error));
     throw error;
   }
 }
