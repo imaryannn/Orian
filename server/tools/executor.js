@@ -232,6 +232,15 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
 
     console.log(`✓ Report generated: ${reportFile.filename}`);
 
+    const savedReportFile = await runFileAgent(goalId, reportContent, {
+      filename: reportFile.filename,
+      format: 'markdown',
+      title: 'Structured Comparison Report',
+    }, io);
+    results.generated_files.push(savedReportFile);
+    reportFile.filepath = savedReportFile.filepath;
+    reportFile.size = savedReportFile.size;
+
     emitTaskUpdate(io, goalId, {
       stage: 'report_generated',
       message: 'Final report generated',
@@ -447,8 +456,27 @@ function formatSynthesis(goal, findings, results) {
     if (finding.query) {
       findingsContent += `\n#### ${finding.query}\n`;
     }
+    if (finding.synthesis?.summary) {
+      findingsContent += `\n${finding.synthesis.summary}\n`;
+    }
+    if (Array.isArray(finding.synthesis?.keyFindings) && finding.synthesis.keyFindings.length > 0) {
+      findingsContent += '\n**Key details:**\n';
+      finding.synthesis.keyFindings.forEach((item) => {
+        findingsContent += `- ${typeof item === 'string' ? item : JSON.stringify(item)}\n`;
+      });
+    }
     if (finding.sources) {
       findingsContent += `**Sources:** ${finding.sources.length} sources found\n`;
+      finding.sources.forEach((source) => {
+        findingsContent += `- [${source.title}](${source.url})\n`;
+      });
+    }
+    if (Array.isArray(finding.rawResults) && finding.rawResults.length > 0) {
+      findingsContent += '\n**Search excerpts:**\n';
+      finding.rawResults.slice(0, 5).forEach((result) => {
+        const excerpt = result.content || result.snippet || result.description || '';
+        findingsContent += `- **${result.title || 'Source'}:** ${excerpt}\n`;
+      });
     }
   });
 

@@ -84,6 +84,14 @@ async function runFileAgent(goalId, content, options = {}, io = null) {
       timestamp: new Date().toISOString(),
     };
 
+    const filePath = path.join(uploadsDir, finalFilename);
+    fs.writeFileSync(filePath, fileContent, 'utf-8');
+    const fileSize = fs.statSync(filePath).size;
+    await addFile(goalId, finalFilename, filePath, fileFormat, fileSize);
+
+    result.filepath = filePath;
+    result.size = fileSize;
+
     await addTaskLog(goalId, 'file_agent_complete', `File generated: ${finalFilename}`, { filename: finalFilename, format: fileFormat });
     emitAgentActivity(io, goalId, 'file_agent', 'generation_complete', { filename: finalFilename });
 
