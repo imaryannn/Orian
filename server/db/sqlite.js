@@ -1,7 +1,4 @@
-// ============================================
-// PostgreSQL Database Configuration & Functions
-// ============================================
-// Purpose: Handle all database operations for goals, tasks, and logs
+
 
 const { Pool } = require('pg');
 
