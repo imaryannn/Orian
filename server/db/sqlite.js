@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-// Database pool
+
 let pool = null;
 
 function getConnectionString() {
