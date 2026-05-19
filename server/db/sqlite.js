@@ -21,9 +21,7 @@ function formatDbError(error) {
   return String(error);
 }
 
-/**
- * Initialize PostgreSQL database and create tables if needed
- */
+
 async function initializeDatabase() {
   const connectionString = getConnectionString();
   
