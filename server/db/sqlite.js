@@ -27,7 +27,7 @@ async function initializeDatabase() {
   
   pool = new Pool({
     connectionString,
-    // For Render: SSL is required
+   
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
   });
 
