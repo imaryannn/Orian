@@ -139,9 +139,6 @@ async function createTables() {
   }
 }
 
-/**
- * Create a new goal
- */
 async function createGoal(goalData) {
   const { id, goal, description, source, metadata, status, createdAt, updatedAt } = goalData;
 
