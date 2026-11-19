@@ -35,15 +35,25 @@ The interface uses Orian's textured background, serif typography, and translucen
 
 ## Screenshots
 
-These screenshots were captured from the [deployed website](https://oriannn.vercel.app). The two views below show the landing page's interactive examples; they illustrate the experience rather than a completed agent run.
+Captured from the signed-in [live app](https://oriannn.vercel.app): a real AI response and the saved calculator project's code and browser preview. The workspace images are cropped to focus on the editor and preview controls.
 
-### Build an idea
+### A real conversation
 
-![Orian's interactive build example showing a habit tracker preview](docs/screenshots/build-example.jpg)
+Orian explains an API using a coffee shop analogy, with Free Auto selected.
 
-### Work with your apps
+![A real Orian conversation showing the user's API question and the assistant's response](docs/screenshots/conversation.jpg)
 
-![Orian's interactive connected-app example showing a weekly planner](docs/screenshots/connect-example.jpg)
+### Code workspace
+
+Browse generated files, edit `index.html`, and download an individual file or the entire project as a ZIP.
+
+![Orian's actual code workspace with index.html open, the project file list, and ZIP download controls](docs/screenshots/workspace-code.jpg)
+
+### A working live preview
+
+The saved calculator runs inside Orian's sandboxed preview. The screenshot shows the result of clicking **7 + 2 =**, verified in the browser.
+
+![The generated calculator running in Orian's live preview and displaying 9 after calculating 7 plus 2](docs/screenshots/workspace-preview.jpg)
 
 ## Try a conversation
 
