@@ -1,0 +1,16 @@
+{
+  "name": "orian",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node scripts/dev.js",
+    "dev": "node scripts/dev.js",
+    "setup": "npm --prefix server ci && npm --prefix frontend ci",
+    "build": "npm --prefix server run build && npm --prefix frontend run build",
+    "test": "npm --prefix server test && npm --prefix frontend test -- --runInBand",
+    "diagnose": "npm --prefix server run diagnose"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

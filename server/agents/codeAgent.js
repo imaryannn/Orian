@@ -3,10 +3,11 @@
 // ============================================
 // Purpose: Write and execute code to solve tasks
 
+const { codeFiles } = require('../lib/workspace');
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { callGroqJson } = require('../tools/groq');
+const { callLLMJson } = require('../tools/llm');
 const { CODE_AGENT_SYSTEM_PROMPT, getCodeAgentPrompt } = require('../tools/prompts');
 const { addTaskLog, addFile } = require('../db/sqlite');
 const { emitAgentActivity } = require('../sockets/socket');
@@ -31,10 +32,10 @@ async function runCodeAgent(goalId, task, options = {}, io = null) {
     const {
       language = 'javascript',
       constraints = '',
-      execute = true,
+      execute = false,
     } = options;
 
-    console.log(`[CODE_AGENT] Generating code for: "${task}"`);
+    console.log(`[CODE_AGENT] Generating code for: "${task.slice(0, 180)}"`);
 
     // Emit activity
     emitAgentActivity(io, goalId, 'code_agent', 'generation_starting', {
@@ -45,41 +46,16 @@ async function runCodeAgent(goalId, task, options = {}, io = null) {
     // Log to database
     await addTaskLog(goalId, 'code_agent_start', `Code agent generating ${language} code`);
 
-    // Generate code using Groq
-    console.log('[CODE_AGENT] Calling Groq to generate code...');
+    // Generate code using LLM
+    console.log('[CODE_AGENT] Calling LLM to generate code...');
 
     const codePrompt = getCodeAgentPrompt(task, constraints);
 
-    let codeResponse;
-    try {
-      codeResponse = await callGroqJson(codePrompt, {
-        model: process.env.GROQ_MODEL || 'mixtral-8x7b-32768',
-        maxTokens: 3000,
-        temperature: 0.5,
-        systemPrompt: CODE_AGENT_SYSTEM_PROMPT,
-      });
-    } catch (groqErr) {
-      console.warn('[CODE_AGENT] Groq JSON failed, trying plain text:', groqErr.message);
-      const { callGroq } = require('../tools/groq');
-      try {
-        const raw = await callGroq(codePrompt, {
-          model: process.env.GROQ_MODEL || 'mixtral-8x7b-32768',
-          maxTokens: 3000,
-          temperature: 0.5,
-          systemPrompt: CODE_AGENT_SYSTEM_PROMPT,
-        });
-        const codeMatch = raw.match(/```(?:\w+)?\n?([\s\S]*?)```/) || raw.match(/((?:function|const|let|var|class|<!DOCTYPE|<html)[\s\S]*)/);
-        codeResponse = { code: codeMatch ? codeMatch[1].trim() : raw.trim(), language, description: task };
-      } catch (_) {
-        codeResponse = { code: `// task: ${task}\nconsole.log('task processed');`, language, description: task };
-      }
-    }
-
-    console.log('[CODE_AGENT] Code generated');
-
-    if (!codeResponse.code) {
-      codeResponse.code = `// task: ${task}\nconsole.log('task processed');`;
-    }
+    const codeResponse = await callLLMJson(codePrompt, {
+      maxTokens: 4096, temperature: 0.5, systemPrompt: CODE_AGENT_SYSTEM_PROMPT,
+    });
+    const files = codeFiles(codeResponse);
+    codeResponse.code = codeResponse.code || files.map(file => file.content).join('\n\n');
 
     emitAgentActivity(io, goalId, 'code_agent', 'code_generated', { lines: codeResponse.code.split('\n').length });
 
@@ -111,9 +87,11 @@ async function runCodeAgent(goalId, task, options = {}, io = null) {
     }
 
     const result = {
+      files,
+      entry: (files.some(file => file.path === codeResponse.entry) ? codeResponse.entry : null) || files.find(file => file.path.endsWith('.html'))?.path || files[0].path,
       language: codeResponse.language || language,
       code: codeResponse.code,
-      description: codeResponse.description || task,
+      description: codeResponse.description || 'Project files are ready in the workspace.',
       expectedOutput: codeResponse.expected_output || '',
       codeSize: Buffer.byteLength(codeResponse.code),
       execution: executionResult,

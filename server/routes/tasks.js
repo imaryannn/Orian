@@ -5,6 +5,10 @@
 
 const express = require('express');
 const router = express.Router();
+const { requireAuth } = require('../middleware/auth');
+const { requireGoalOwner } = require('./goal');
+router.use(requireAuth);
+router.use('/:goalId', requireGoalOwner);
 const { getJobStatus, getTaskQueue } = require('../queues/taskQueue');
 const { getTaskLogs } = require('../db/sqlite');
 
@@ -80,7 +84,7 @@ router.get('/', async (req, res) => {
     console.log(`[TASKS] Fetching ${status} tasks`);
 
     // Get all tasks with specific status
-    const tasks = await require('../db/sqlite').getTasksByStatus(status);
+    const tasks = await require('../db/sqlite').getTasksByStatus(status, req.user.userId);
 
     res.json({
       status,
@@ -124,6 +128,7 @@ router.delete('/:goalId', async (req, res) => {
     }
 
     await job.remove();
+    await require('../db/sqlite').updateGoalStatus(goalId, 'cancelled');
 
     res.json({
       goalId,

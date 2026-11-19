@@ -3,7 +3,7 @@
 // ============================================
 // Purpose: Summarize and distill complex information
 
-const { callGroqJson } = require('../tools/groq');
+const { callLLMJson } = require('../tools/llm');
 const { SUMMARIZER_SYSTEM_PROMPT, getSummarizerPrompt } = require('../tools/prompts');
 const { addTaskLog } = require('../db/sqlite');
 const { emitAgentActivity } = require('../sockets/socket');
@@ -26,6 +26,7 @@ async function runSummarizer(goalId, content, options = {}, io = null) {
     emitAgentActivity(io, goalId, 'summarizer', 'summarization_starting', {
       contentLength: content.length,
       focus,
+      message: 'Summarizing findings into report...',
     });
 
     // Log to database
@@ -34,11 +35,10 @@ async function runSummarizer(goalId, content, options = {}, io = null) {
     // Generate summary prompt
     const prompt = getSummarizerPrompt(content, focus);
 
-    console.log('[SUMMARIZER] Calling Groq...');
+    console.log('[SUMMARIZER] Calling LLM...');
 
-    // Call Groq to generate summary
-    const summary = await callGroqJson(prompt, {
-      model: process.env.GROQ_MODEL || 'mixtral-8x7b-32768',
+    // Call LLM to generate summary
+    const summary = await callLLMJson(prompt, {
       maxTokens: 1500,
       temperature: 0.5,
       systemPrompt: SUMMARIZER_SYSTEM_PROMPT,
@@ -48,7 +48,7 @@ async function runSummarizer(goalId, content, options = {}, io = null) {
 
     // Validate summary structure
     if (!summary.summary) {
-      throw new Error('Invalid summary format from Groq');
+      throw new Error('Invalid summary format from LLM');
     }
 
     // Create result object
@@ -80,6 +80,7 @@ async function runSummarizer(goalId, content, options = {}, io = null) {
     emitAgentActivity(io, goalId, 'summarizer', 'summarization_complete', {
       keyPointCount: result.keyPoints.length,
       compressionRatio: result.compressionRatio,
+      message: `Report generated (${result.summaryLength} chars)`,
     });
 
     return result;
@@ -237,7 +238,7 @@ async function extractHighlights(content, count = 5) {
 
 ${content}`;
 
-    const result = await callGroqJson(prompt, {
+    const result = await callLLMJson(prompt, {
       maxTokens: 800,
       temperature: 0.5,
     });

@@ -14,10 +14,26 @@ frontend/build/
 # Misc
 .DS_Store
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
+!.env.*.example
+
+# Local AI tooling and hosting account configuration
+.agents/
+.claude/
+.codex/
+.vercel/
+.render/
+.aws/
+skills-lock.json
+
+# Credentials and private certificates
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
 
 # Logs
 npm-debug.log*
@@ -67,3 +83,12 @@ dump.rdb
 # Uploaded files
 server/uploads/
 uploads/
+
+# Generated agent work and build/test artifacts
+server/codes/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.zip
+*.tsbuildinfo

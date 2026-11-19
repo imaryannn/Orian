@@ -29,7 +29,7 @@ async function initializeRedis() {
       enableReadyCheck: false,
       keepAlive: 30000, // Sends a ping every 30s to keep connection alive
       connectTimeout: 20000,
-      tls: redisUrl.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
+      tls: redisUrl.startsWith('rediss://') ? {} : undefined,
     });
 
     // Connection Event Handlers
@@ -57,7 +57,7 @@ async function initializeRedis() {
     taskQueue = new Queue(QUEUE_NAME, {
       connection: redisClient,
       defaultJobOptions: {
-        attempts: 3,
+        attempts: 1, // Never replay external writes automatically.
         backoff: {
           type: 'exponential',
           delay: 2000,
@@ -112,6 +112,8 @@ async function addTaskToQueue(goalId, goalData) {
         goal: goalData.goal,
         description: goalData.description || '',
         userId: goalData.userId || null,
+        context: (goalData.context || []).slice(-20),
+        workspace: goalData.workspace || null,
         createdAt: new Date().toISOString(),
       },
       {

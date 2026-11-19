@@ -10,10 +10,13 @@ const { runFileAgent, createMarkdownReport } = require('../agents/fileAgent');
 const { runCodeAgent } = require('../agents/codeAgent');
 const { runCritic, isApproved } = require('../agents/critic');
 const { runSummarizer } = require('../agents/summarizer');
-const { runDeliveryAgent } = require('../agents/deliveryAgent');
-const { updateGoalStatus, addTaskLog } = require('../db/sqlite');
+const { mergeFiles } = require('../lib/workspace');
+const { actionLinks, conciseSummary } = require('./actionResult');
+const { runIntegrationAgent } = require('../agents/integrationAgent');
+const { getGoal, updateGoalStatus, addTaskLog } = require('../db/sqlite');
 const { emitTaskUpdate, emitTaskComplete, emitError } = require('../sockets/socket');
 const { startTrace, startSpan, endSpan, endTrace } = require('./tracer');
+const { runWithLLMUser } = require('./llm');
 
 /**
  * Execute the complete autonomous workflow for a goal
@@ -22,7 +25,7 @@ const { startTrace, startSpan, endSpan, endTrace } = require('./tracer');
  * @param {Object} io - Socket.io instance
  * @returns {Promise<Object>} - Final result and report
  */
-async function executeGoal(goalId, goalData, io) {
+async function executeGoalInternal(goalId, goalData, io) {
   const startTime = Date.now();
   let traceId, rootSpan;
 
@@ -36,30 +39,20 @@ async function executeGoal(goalId, goalData, io) {
     traceId = startTrace(goalId);
     rootSpan = startSpan(traceId, 'workflow.execute', null, { goal: goalData.goal, goalId });
 
-    const { callGroqJson } = require('./groq');
-    let intentCheck = null;
-    try {
-      intentCheck = await callGroqJson(
-        `User input: "${goalData.goal}"
-
-Classify this input. If it is a greeting, casual chat, single word, or too vague to act on (e.g. "hi", "hello", "how are you", "test", "hey"): type is "chat".
-If it is a real actionable goal (research, write, build, analyze, find, create, summarize, etc.): type is "task".
-
-Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly reply if chat, else empty string" }`
-      );
-    } catch (_) {}
-
-    if (intentCheck?.type === 'chat') {
-      const reply = intentCheck.reply || "hey! give me a real goal — like researching a topic, writing a report, or building something.";
-      await updateGoalStatus(goalId, 'completed');
-      emitTaskComplete(io, goalId, {
-        goalId,
-        status: 'completed',
-        summary: { main: reply },
-        report: { content: reply, sections: [] },
-        artifacts: { code: [], files: [] },
-      });
-      return;
+    await assertNotCancelled(goalId);
+    emitTaskUpdate(io, goalId, { stage: 'understanding', message: 'Reading your request and conversation', progress: 3, agent: 'assistant' });
+    const intentCheck = await require('../agents/intent').classifyRequest(goalData.goal, goalData.context || [], Boolean(goalData.workspace?.files?.length));
+    if (!['chat', 'task', 'clarify'].includes(intentCheck.type)) throw new Error('Invalid intent response');
+    if (intentCheck.type === 'chat' || intentCheck.type === 'clarify') {
+      if (typeof intentCheck.reply !== 'string' || !intentCheck.reply.trim()) throw new Error('Empty chat response');
+      const reply = intentCheck.reply;
+      const result = { goalId, mode: intentCheck.type === 'clarify' ? 'clarification' : 'chat', status: 'completed', summary: { main: reply }, report: { content: reply, sections: [] }, artifacts: { code: [], files: [] } };
+      await assertNotCancelled(goalId);
+      await updateGoalStatus(goalId, 'completed', result);
+      emitTaskComplete(io, goalId, result);
+      endSpan(rootSpan, 'ok');
+      endTrace(traceId);
+      return result;
     }
 
     // ============================================
@@ -73,7 +66,7 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
     });
 
     const planSpan = startSpan(traceId, 'agent.planner', rootSpan.spanId, { goal: goalData.goal });
-    const plan = await runPlanner(goalId, goalData.goal, goalData.description, io, goalData.userId);
+    const plan = await runPlanner(goalId, goalData.goal, `${goalData.description || ''}\n${goalData.workspace?.files?.length ? 'Existing coding workspace: ' + goalData.workspace.files.map(f => f.path).join(', ') + '. Route requested changes to code_execution.' : ''}`, io, goalData.userId, goalData.context || []);
     endSpan(planSpan, 'ok', { subtaskCount: plan.subtasks.length });
 
     console.log(`✓ Plan created with ${plan.subtasks.length} subtasks`);
@@ -126,6 +119,7 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
       generated_files: [],
       code_executions: [],
       analyses: [],
+      actions: [],
     };
 
     let completedTasks = 0;
@@ -140,6 +134,7 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
       // Execute tasks sequentially to avoid rate limits
       const batchResults = [];
       for (const taskId of batchIds) {
+          await assertNotCancelled(goalId);
           const task = getSubtask(plan, taskId);
           const routing = routingDecisions.find((r) => r.taskId === taskId);
 
@@ -152,13 +147,29 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
           const progress = 25 + (completedTasks / totalTasks) * 50;
           emitTaskUpdate(io, goalId, {
             stage: 'execution_in_progress',
+            agent: routing.assignedAgent,
             message: `Executing task: ${task.task}`,
             progress,
             currentTask: taskId,
           });
 
           const taskSpan = startSpan(traceId, `agent.${routing.assignedAgent}`, rootSpan.spanId, { task: task.task, taskId });
-          const result = await executeTask(goalId, task, routing, io, goalData.userId);
+          const priorWork = JSON.stringify({ conversation: goalData.context || [], results, currentBatch: batchResults, workspace: goalData.workspace });
+          const result = await executeTask(goalId, task, routing, io, goalData.userId, priorWork.slice(-180000));
+          if ((routing.assignedAgent === 'code_execution' || result.workspaceArtifact) && result.files?.length) {
+            goalData.workspace = { files: mergeFiles(goalData.workspace?.files || [], result.files), entry: goalData.workspace?.entry || result.files.find(file => file.path.endsWith('.html') && !require('../lib/workspace').isTestPage(file.content, file.path))?.path || result.entry };
+            goalData.workspace = await require('../db/sqlite').saveWorkspace(goalId, goalData.workspace);
+          }
+          await assertNotCancelled(goalId);
+          if (result.needsInput) {
+            const reply = { goalId, mode: 'clarification', status: 'completed', report: { content: result.question, sections: [] }, artifacts: { code: [], files: [] } };
+            await updateGoalStatus(goalId, 'completed', reply);
+            emitTaskComplete(io, goalId, reply);
+            endSpan(taskSpan, 'ok');
+            endSpan(rootSpan, 'ok');
+            endTrace(traceId);
+            return reply;
+          }
           endSpan(taskSpan, 'ok', { agent: routing.assignedAgent });
           completedTasks++;
           batchResults.push({ taskId, task: task.task, agent: routing.assignedAgent, result });
@@ -173,11 +184,14 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
         if (agent === 'web_search') {
           results.web_searches.push(result);
         } else if (agent === 'file_generation') {
-          results.generated_files.push(result);
+          if (result.workspaceArtifact) results.code_executions.push(result);
+          else results.generated_files.push(result);
         } else if (agent === 'code_execution') {
           results.code_executions.push(result);
         } else if (agent === 'analysis') {
           results.analyses.push(result);
+        } else {
+          results.actions.push(result);
         }
       });
 
@@ -217,7 +231,7 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
       synthesisContent.findings,
       synthesisContent.artifacts,
       synthesisContent.execution,
-    ].join('\n\n');
+    ].filter(Boolean).join('\n\n');
 
     const reportFile = {
       filename: `report-${goalId}.md`,
@@ -235,7 +249,8 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
     const savedReportFile = await runFileAgent(goalId, reportContent, {
       filename: reportFile.filename,
       format: 'markdown',
-      title: 'Structured Comparison Report',
+      title: goalData.goal.slice(0, 100),
+      structure: false,
     }, io);
     results.generated_files.push(savedReportFile);
     reportFile.filepath = savedReportFile.filepath;
@@ -260,7 +275,7 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
 
     const criticAssessment = await runCritic(
       goalId,
-      synthesisContent.summary,
+      reportContent,
       goalData.goal,
       io
     );
@@ -285,7 +300,7 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
       progress: 95,
     });
 
-    const summary = await runSummarizer(goalId, synthesisContent.summary, {
+    const summary = await runSummarizer(goalId, reportContent, {
       focus: 'key findings and actionable insights',
     }, io);
 
@@ -329,6 +344,7 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
         highlights: summary.highlights,
       },
       report: reportFile,
+      workspace: goalData.workspace || null,
       artifacts: {
         code: results.code_executions,
         files: results.generated_files,
@@ -336,6 +352,8 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
     };
 
     // Save final result to database
+    await assertNotCancelled(goalId);
+    finalResult.actions = results.actions;
     await updateGoalStatus(goalId, 'completed', finalResult);
 
     // Log completion
@@ -353,12 +371,14 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
     endSpan(rootSpan, 'ok', { duration: finalResult.duration, quality: finalResult.quality?.score });
     endTrace(traceId);
 
-    if (goalData.userId) {
-      await runDeliveryAgent(goalId, reportContent, goalData.goal, goalData.userId);
-    }
 
     return finalResult;
   } catch (error) {
+    if (error.code === 'cancelled') {
+      if (rootSpan) endSpan(rootSpan, 'cancelled');
+      if (traceId) endTrace(traceId);
+      throw error;
+    }
     console.error(`\n✗ Goal execution failed: ${error.message}`);
     console.error(error.stack);
 
@@ -391,7 +411,7 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short friendly repl
  * @param {Object} io - Socket.io instance
  * @returns {Promise<Object>} - Task result
  */
-async function executeTask(goalId, task, routing, io, userId = null) {
+async function executeTask(goalId, task, routing, io, userId = null, context = '') {
   const agent = routing.assignedAgent;
   const parameters = routing.parameters || {};
 
@@ -403,25 +423,26 @@ async function executeTask(goalId, task, routing, io, userId = null) {
         return await runWebAgent(goalId, parameters.query || task.task, { maxResults: parameters.maxResults || 5 }, io);
 
       case 'file_generation':
-        return await runFileAgent(goalId, parameters.content || task.task, { filename: parameters.filename || 'output.md', format: parameters.format || 'markdown' }, io);
+        if (/\b(?:HTML|CSS|JavaScript)\b|\bindex\.html\b/i.test(task.task) || /\.(html|js|css)$/.test(parameters.filename || '')) {
+          return { ...await runCodeAgent(goalId, `${task.task}\nPrevious work: ${context}`, { execute: false }, io), workspaceArtifact: true };
+        }
+        return await runFileAgent(goalId, `${parameters.content || task.task}\n\nPrevious work:\n${context}`, { filename: parameters.filename || 'output.md', format: parameters.format || 'markdown' }, io);
 
       case 'code_execution':
-        return await runCodeAgent(goalId, parameters.task || task.task, { language: parameters.language || 'javascript', execute: true }, io);
+        return await runCodeAgent(goalId, `${parameters.task || task.task}\n\nPrevious work:\n${context}`, { language: parameters.language || 'javascript', execute: false }, io);
 
-      case 'analysis':
-        return await runWebAgent(goalId, parameters.query || task.task, { maxResults: 10 }, io);
-
+      case 'analysis': {
+        const { callLLM } = require('./llm');
+        const summary = await callLLM(`Task: ${task.task}\nPrevious work and conversation: ${context}`, { maxTokens: 3072, systemPrompt: 'Analyze or write the requested content using the provided evidence. Do not invent sources or claim tool actions.' });
+        return { query: task.task, synthesis: { summary }, sources: [] };
+      }
       case 'notion_action':
-        return await runNotionAction(goalId, task.task, userId);
-
       case 'slack_action':
-        return await runSlackAction(goalId, task.task, userId);
-
       case 'github_action':
-        return await runGitHubAction(goalId, task.task, userId);
-
       case 'google_action':
-        return await runGoogleAction(goalId, task.task, userId);
+      case 'linear_action':
+      case 'airtable_action':
+        return runIntegrationAgent(goalId, task.task, agent.replace('_action', ''), userId, io, context);
 
       default:
         throw new Error(`Unknown agent: ${agent}`);
@@ -440,78 +461,28 @@ async function executeTask(goalId, task, routing, io, userId = null) {
  * @returns {Object} - Formatted content
  */
 function formatSynthesis(goal, findings, results) {
-  let summary = `## Overview\n\nThis report summarizes findings related to: "${goal}"\n\n`;
-
-  if (findings.length > 0) {
-    summary += '### Key Findings\n';
-    findings.forEach((finding, i) => {
-      if (finding.synthesis?.summary) {
-        summary += `${i + 1}. ${finding.synthesis.summary}\n\n`;
-      }
-    });
+  const findingsContent = findings.map(finding => {
+    let text = finding.synthesis?.summary || '';
+    if (finding.synthesis?.keyFindings?.length) text += '\n\n' + finding.synthesis.keyFindings.map(item => `- ${typeof item === 'string' ? item : JSON.stringify(item)}`).join('\n');
+    if (finding.sources?.length) text += '\n\nSources:\n' + finding.sources.map(source => `- [${source.title || source.url}](${source.url})`).join('\n');
+    return text;
+  }).filter(Boolean).join('\n\n');
+  const artifacts = results.generated_files.map(file => file.content || '').filter(Boolean);
+  for (const code of results.code_executions) artifacts.push(code.description || 'Code is ready in the workspace.');
+  for (const action of results.actions || []) {
+    artifacts.push(conciseSummary(action.summary));
+    for (const url of actionLinks(action)) artifacts.push(`[Open ${action.provider === 'google' ? 'Google Doc' : action.provider === 'notion' ? 'Notion page' : action.provider}](${url})`);
   }
-
-  let findingsContent = '### Detailed Findings\n';
-  findings.forEach((finding) => {
-    if (finding.query) {
-      findingsContent += `\n#### ${finding.query}\n`;
-    }
-    if (finding.synthesis?.summary) {
-      findingsContent += `\n${finding.synthesis.summary}\n`;
-    }
-    if (Array.isArray(finding.synthesis?.keyFindings) && finding.synthesis.keyFindings.length > 0) {
-      findingsContent += '\n**Key details:**\n';
-      finding.synthesis.keyFindings.forEach((item) => {
-        findingsContent += `- ${typeof item === 'string' ? item : JSON.stringify(item)}\n`;
-      });
-    }
-    if (finding.sources) {
-      findingsContent += `**Sources:** ${finding.sources.length} sources found\n`;
-      finding.sources.forEach((source) => {
-        findingsContent += `- [${source.title}](${source.url})\n`;
-      });
-    }
-    if (Array.isArray(finding.rawResults) && finding.rawResults.length > 0) {
-      findingsContent += '\n**Search excerpts:**\n';
-      finding.rawResults.slice(0, 5).forEach((result) => {
-        const excerpt = result.content || result.snippet || result.description || '';
-        findingsContent += `- **${result.title || 'Source'}:** ${excerpt}\n`;
-      });
-    }
-  });
-
-  let artifactsContent = '### Generated Artifacts\n';
-  if (results.generated_files.length > 0) {
-    artifactsContent += '\n**Files:**\n';
-    results.generated_files.forEach((file) => {
-      artifactsContent += `\n#### ${file.filename}\n\`\`\`\n${file.content || ''}\n\`\`\`\n`;
-    });
-  }
-  if (results.code_executions.length > 0) {
-    artifactsContent += '\n**Code:**\n';
-    results.code_executions.forEach((code) => {
-      artifactsContent += `\n#### ${code.description || 'code'} (${code.language})\n\`\`\`${code.language}\n${code.code || ''}\n\`\`\`\n`;
-    });
-  }
-
-  const executionContent = `### Execution Summary
-- Total tasks executed: ${(results.generated_files.length + results.code_executions.length + results.web_searches.length)}
-- Web searches: ${results.web_searches.length}
-- Files generated: ${results.generated_files.length}
-- Code executions: ${results.code_executions.length}
-- Analyses: ${results.analyses.length}`;
-
-  return {
-    summary,
-    findings: findingsContent,
-    artifacts: artifactsContent,
-    execution: executionContent,
-  };
+  return { summary: '', findings: findingsContent, artifacts: artifacts.join('\n\n'), execution: '' };
 }
 
 // ============================================
 // EXPORTS
 // ============================================
+
+async function executeGoal(goalId, goalData, io) {
+  return runWithLLMUser(goalData && goalData.userId, () => executeGoalInternal(goalId, goalData, io), () => assertNotCancelled(goalId));
+}
 
 module.exports = {
   executeGoal,
@@ -519,134 +490,11 @@ module.exports = {
   formatSynthesis,
 };
 
-const https = require('https');
-const { getIntegration } = require('../db/integrations');
-
-function httpsPost(hostname, path, headers, payload) {
-  return new Promise((resolve, reject) => {
-    const req = https.request({ hostname, path, method: 'POST', headers: { ...headers, 'Content-Length': Buffer.byteLength(payload) }, timeout: 15000 }, (res) => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => resolve({ status: res.statusCode, data }));
-    });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    req.write(payload);
-    req.end();
-  });
-}
-
-async function runNotionAction(goalId, task, userId) {
-  const integration = await getIntegration(userId, 'notion');
-  if (!integration) return { skipped: true, reason: 'notion not connected' };
-
-  const { callGroq } = require('./groq');
-
-  const raw = await callGroq(
-    `Create a Notion todo list for: "${task}"
-Respond with ONLY a JSON object, no markdown:
-{"title": "page title", "todos": ["todo 1", "todo 2", "todo 3"]}`,
-    { maxTokens: 512, temperature: 0.5 }
-  );
-
-  let title, todos;
-  try {
-    const match = raw.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(match ? match[0] : raw);
-    title = parsed.title || task.substring(0, 100);
-    todos = Array.isArray(parsed.todos) && parsed.todos.length > 0 ? parsed.todos : [task];
-  } catch {
-    title = task.substring(0, 100);
-    todos = [task];
+async function assertNotCancelled(goalId) {
+  const goal = await getGoal(goalId);
+  if (!goal || goal.status === 'cancelled') {
+    const error = new Error('Task cancelled');
+    error.code = 'cancelled';
+    throw error;
   }
-
-  const children = todos.map(todo => ({
-    object: 'block',
-    type: 'to_do',
-    to_do: {
-      rich_text: [{ type: 'text', text: { content: todo } }],
-      checked: false,
-    },
-  }));
-
-  const payload = JSON.stringify({
-    parent: { type: 'workspace', workspace: true },
-    properties: { title: [{ text: { content: title } }] },
-    children,
-  });
-
-  const res = await httpsPost(
-    'api.notion.com', '/v1/pages',
-    { 'Authorization': `Bearer ${integration.accessToken}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
-    payload
-  );
-  const page = JSON.parse(res.data);
-  return { delivered: true, notionUrl: page.url, pageId: page.id, title, todoCount: todos.length };
-}
-
-async function runSlackAction(goalId, task, userId) {
-  const integration = await getIntegration(userId, 'slack');
-  if (!integration) return { skipped: true, reason: 'slack not connected' };
-  const meta = JSON.parse(integration.metadata || '{}');
-  if (!meta.webhookUrl) return { skipped: true, reason: 'no slack webhook' };
-  const url = new URL(meta.webhookUrl);
-  const payload = JSON.stringify({ text: task });
-  const res = await httpsPost(url.hostname, url.pathname + url.search, { 'Content-Type': 'application/json' }, payload);
-  return { delivered: true, status: res.status };
-}
-
-async function runGitHubAction(goalId, task, userId) {
-  const integration = await getIntegration(userId, 'github');
-  if (!integration) return { skipped: true, reason: 'github not connected' };
-  const payload = JSON.stringify({ description: task.substring(0, 100), public: false, files: { 'task.md': { content: task } } });
-  const res = await httpsPost('api.github.com', '/gists',
-    { 'Authorization': `Bearer ${integration.accessToken}`, 'Content-Type': 'application/json', 'User-Agent': 'orian-agent' },
-    payload
-  );
-  const gist = JSON.parse(res.data);
-  return { delivered: true, gistUrl: gist.html_url };
-}
-
-async function runGoogleAction(goalId, task, userId) {
-  const integration = await getIntegration(userId, 'google');
-  if (!integration) return { skipped: true, reason: 'google not connected' };
-
-  const { callGroq } = require('./groq');
-  const raw = await callGroq(
-    `Create content for a Google Doc about this task: "${task}"
-
-Respond with ONLY a JSON object, no markdown:
-{"title": "doc title here", "content": "full document content here"}`,
-    { maxTokens: 1024, temperature: 0.5 }
-  );
-
-  let title, content;
-  try {
-    const match = raw.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(match ? match[0] : raw);
-    title = parsed.title || task.substring(0, 100);
-    content = parsed.content || task;
-  } catch {
-    title = task.substring(0, 100);
-    content = raw;
-  }
-
-  const createRes = await httpsPost(
-    'docs.googleapis.com', '/v1/documents',
-    { 'Authorization': `Bearer ${integration.accessToken}`, 'Content-Type': 'application/json' },
-    JSON.stringify({ title })
-  );
-  const doc = JSON.parse(createRes.data);
-  if (!doc.documentId) {
-    console.error('[GOOGLE] Create doc failed:', createRes.data);
-    return { skipped: true, reason: 'failed to create doc' };
-  }
-
-  await httpsPost(
-    'docs.googleapis.com', `/v1/documents/${doc.documentId}:batchUpdate`,
-    { 'Authorization': `Bearer ${integration.accessToken}`, 'Content-Type': 'application/json' },
-    JSON.stringify({ requests: [{ insertText: { location: { index: 1 }, text: content } }] })
-  );
-
-  return { delivered: true, docUrl: `https://docs.google.com/document/d/${doc.documentId}`, title };
 }

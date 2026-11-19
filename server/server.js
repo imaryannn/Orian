@@ -1,7 +1,7 @@
 // ============================================
 // ORIAN - Main Server Entry Point
 // ============================================
-// Purpose: Initialize Express, Socket.io, Redis, PostgreSQL
+// Purpose: Initialize Express, Socket.io, Redis, MongoDB
 // and orchestrate the entire autonomous agent system
 
 const express = require('express');
@@ -11,7 +11,7 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: require('path').join(__dirname, '.env') });
 
 function logStartupError(label, error) {
   const message = error && error.stack ? error.stack : error && error.message ? error.message : String(error);
@@ -35,17 +35,21 @@ const goalRoutes = require('./routes/goal');
 const taskRoutes = require('./routes/tasks');
 const webhookRoutes = require('./routes/webhook');
 const integrationsRoutes = require('./routes/integrations');
-const authRoutes = require('./routes/auth');
+const settingsRoutes = require('./routes/settings');
 const { initializeRedis } = require('./queues/taskQueue');
-const { router: orianApiRoutes, initializeApiRoutes } = require('./src/routes/api');
+
 
 // Initialize Express app
 const app = express();
+app.set('trust proxy', 1);
+const { clerkMiddleware } = require("@clerk/express");
+app.use(clerkMiddleware());
 const server = http.createServer(app);
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   'https://oriannn.vercel.app',
   'http://localhost:3000',
+  'http://localhost:3001',
 ].filter(Boolean);
 const corsOptions = {
   origin(origin, callback) {
@@ -154,12 +158,11 @@ app.get('/api/stats/queue', async (req, res) => {
 });
 
 // Mount API routes
-app.use('/api', orianApiRoutes);
-app.use('/', orianApiRoutes);
-app.use('/api/goal', goalRoutes);
-app.use('/api/tasks', taskRoutes);
-app.use('/api/webhook', webhookRoutes);
-app.use('/', authRoutes);
+
+    app.use('/api/goal', goalRoutes);
+    app.use('/api/tasks', taskRoutes);
+    app.use('/api/webhook', webhookRoutes);
+    app.use('/api/settings', settingsRoutes);
 app.use('/', integrationsRoutes);
 
 // 404 handler
@@ -188,28 +191,24 @@ async function initializeSystem() {
     console.log('\n========== ORIAN INITIALIZATION ==========\n');
     console.log('[BOOT] Queue reliability patch loaded');
 
-    // 1. Initialize PostgreSQL database
-    console.log('[DB] Initializing PostgreSQL database...');
+    // 1. Initialize MongoDB database
+    console.log('[DB] Initializing MongoDB database...');
     await initializeDatabase();
-    await initializeApiRoutes();
-    console.log('[DB] PostgreSQL database initialized successfully');
+    console.log('[DB] MongoDB database initialized successfully');
 
     // 2. Initialize Redis connection for BullMQ
     console.log('[REDIS] Connecting to Redis...');
     await initializeRedis();
     console.log('[REDIS] ✓ Redis connection established');
 
-    // Reconcile goals that were saved to PostgreSQL but are missing from Redis.
+    // Reconcile goals that were saved to MongoDB but are missing from Redis.
     await requeuePendingGoals();
 
     // 3. Verify environment variables
     console.log('[ENV] Validating environment variables...');
-    const requiredVars = ['GROQ_API_KEY', 'TAVILY_API_KEY', 'JWT_SECRET'];
+    const requiredVars = ['OPENROUTER_API_KEY', 'CLERK_PUBLISHABLE_KEY', 'CLERK_SECRET_KEY'];
     const missingVars = requiredVars.filter((v) => !process.env[v]);
     if (missingVars.length > 0) throw new Error(`Missing environment variables: ${missingVars.join(', ')}`);
-    if (process.env.JWT_SECRET === 'change-this-to-a-long-random-secret') {
-      throw new Error('JWT_SECRET is still set to the default insecure value. Set a strong secret in .env');
-    }
     console.log('[ENV] ✓ All required environment variables present');
 
     // 4. Start the task worker
@@ -219,20 +218,22 @@ async function initializeSystem() {
     console.log('[WORKER] ✓ Task worker started and listening for jobs');
 
     // 5. Log configuration
+    const { DEFAULT_MODEL_ID: defaultLlmModel } = require('./tools/llm');
     const config = {
       port: process.env.PORT || 3000,
       nodeEnv: process.env.NODE_ENV || 'development',
-      redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
+      redisConfigured: Boolean(process.env.REDIS_URL),
       queueName: process.env.QUEUE_NAME || 'orian-autopilot-tasks',
-      groqModel: process.env.GROQ_MODEL || 'mixtral-8x7b-32768',
+      llmProvider: 'openrouter',
+      llmModel: process.env.OPENROUTER_MODEL || defaultLlmModel,
     };
 
     console.log('[CONFIG] Server Configuration:');
     console.log(`  - Port: ${config.port}`);
     console.log(`  - Environment: ${config.nodeEnv}`);
-    console.log(`  - Redis: ${config.redisUrl}`);
+    console.log(`  - Redis: ${config.redisConfigured ? 'configured' : 'local default'}`);
     console.log(`  - Queue: ${config.queueName}`);
-    console.log(`  - Groq Model: ${config.groqModel}`);
+    console.log(`  - LLM: ${config.llmProvider} (${config.llmModel})`);
 
     console.log('\n========== INITIALIZATION COMPLETE ==========\n');
   } catch (error) {
@@ -242,7 +243,7 @@ async function initializeSystem() {
 }
 
 /**
- * Re-enqueue PostgreSQL goals that are still marked queued.
+ * Re-enqueue MongoDB goals that are still marked queued.
  * This protects against Redis jobs disappearing while the DB source of truth remains queued.
  */
 async function requeuePendingGoals() {
@@ -251,11 +252,11 @@ async function requeuePendingGoals() {
   const queuedGoals = await getTasksByStatus('queued');
 
   if (queuedGoals.length === 0) {
-    console.log('[QUEUE] No pending PostgreSQL goals to reconcile');
+    console.log('[QUEUE] No pending MongoDB goals to reconcile');
     return;
   }
 
-  console.log(`[QUEUE] Reconciling ${queuedGoals.length} queued PostgreSQL goal(s)...`);
+  console.log(`[QUEUE] Reconciling ${queuedGoals.length} queued MongoDB goal(s)...`);
 
   for (const queuedGoal of queuedGoals) {
     if (queuedGoal.status === 'cancelled') continue;
@@ -267,6 +268,9 @@ async function requeuePendingGoals() {
     await addTaskToQueue(queuedGoal.id, {
       goal: queuedGoal.goal,
       description: queuedGoal.description || '',
+      userId: queuedGoal.userId,
+      context: queuedGoal.context || [],
+      workspace: queuedGoal.workspace,
     });
     console.log(`[QUEUE] Re-enqueued queued goal: ${queuedGoal.id}`);
   }

@@ -27,7 +27,7 @@ function PrivacyPolicy({ onBack }) {
               <li>account information: email address and password (hashed) when you register</li>
               <li>goal data: the goals and tasks you submit to the platform for processing</li>
               <li>usage data: logs of agent activity, task results, and workflow execution metadata</li>
-              <li>integration tokens: oauth access tokens for connected services (google, github, slack, notion, discord, airtable) stored encrypted</li>
+              <li>integration settings: per-user settings for connected services (google, github, slack, notion, linear, airtable), while service connections themselves are managed by composio</li>
             </ul>
           </div>
 
@@ -65,7 +65,7 @@ function PrivacyPolicy({ onBack }) {
 
           <div className="legal-section">
             <h2>7. third-party services</h2>
-            <p>orian integrates with third-party services including groq (llm inference), tavily (web search), and various oauth providers. your use of these services is subject to their respective privacy policies. we only transmit the minimum data necessary to fulfill your requested task.</p>
+            <p>orian integrates with third-party services including openrouter (llm inference), tavily (web search), and various oauth providers. your use of these services is subject to their respective privacy policies. we only transmit the minimum data necessary to fulfill your requested task.</p>
           </div>
 
           <div className="legal-section">

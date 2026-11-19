@@ -1,4 +1,4 @@
-const { callGroq, callGroqJson } = require('../tools/groq');
+const { callLLM, callLLMJson } = require('../tools/llm');
 const { searchWebWithRetry, formatSearchResults } = require('../tools/search');
 const { updateWorkflowStep, appendLog, getWorkflow } = require('../services/stateManager');
 const { runDeliveryAgent } = require('./deliveryAgent');
@@ -38,9 +38,9 @@ The "report" key is required. Do not use any other key names like "title", "cont
 
 async function plannerAgent(workflowId, goal, io) {
   console.log(`[ORCHESTRATOR] Planner running for: "${goal}"`);
-  emitAgentActivity(io, workflowId, 'planner', 'analyzing_goal', { goal });
+  emitAgentActivity(io, workflowId, 'planner', 'analyzing_goal', { goal, message: `Analyzing goal: "${goal}"` });
 
-  const result = await callGroqJson(
+  const result = await callLLMJson(
     `Goal: "${goal}"\n\nCreate a detailed execution plan.`,
     { systemPrompt: PLANNER_PROMPT, maxTokens: 1024, temperature: 0.5 }
   );
@@ -56,18 +56,18 @@ async function plannerAgent(workflowId, goal, io) {
 
   await updateWorkflowStep(workflowId, { plan: subtasks, status: 'planning_complete' });
   await appendLog(workflowId, { agent: 'planner', action: 'plan_created', subtaskCount: subtasks.length });
-  emitAgentActivity(io, workflowId, 'planner', 'plan_generated', { subtaskCount: subtasks.length });
+  emitAgentActivity(io, workflowId, 'planner', 'plan_generated', { subtaskCount: subtasks.length, message: `Plan ready: ${subtasks.length} subtasks created` });
   emitTaskUpdate(io, workflowId, { stage: 'planning_complete', message: `Plan ready: ${subtasks.length} subtasks`, progress: 15 });
 
   return subtasks;
 }
 
 async function routerAgent(workflowId, task, io) {
-  emitAgentActivity(io, workflowId, 'router', 'routing_task', { task: task.instruction });
+  emitAgentActivity(io, workflowId, 'router', 'routing_task', { task: task.instruction, message: `Routing: "${task.instruction.substring(0, 60)}..."` });
 
   let agentType = task.agentType;
   try {
-    const result = await callGroqJson(ROUTER_PROMPT(task.instruction), { maxTokens: 256, temperature: 0.3 });
+    const result = await callLLMJson(ROUTER_PROMPT(task.instruction), { maxTokens: 256, temperature: 0.3 });
     agentType = result.agentType || task.agentType;
   } catch {
     console.warn('[ORCHESTRATOR] Router fallback to task default agentType');
@@ -76,19 +76,19 @@ async function routerAgent(workflowId, task, io) {
   const validTypes = ['web_search', 'code', 'file', 'analysis'];
   if (!validTypes.includes(agentType)) agentType = 'analysis';
 
-  emitAgentActivity(io, workflowId, 'router', 'task_routed', { agentType });
+  emitAgentActivity(io, workflowId, 'router', 'task_routed', { agentType, message: `Assigned to ${agentType} agent` });
   return agentType;
 }
 
 async function executeSpecialist(workflowId, task, agentType, io) {
-  emitAgentActivity(io, workflowId, agentType, 'executing', { instruction: task.instruction });
+  emitAgentActivity(io, workflowId, agentType, 'executing', { instruction: task.instruction, message: `Executing: "${task.instruction.substring(0, 60)}..."` });
 
   if (agentType === 'web_search') {
     const searchResult = await searchWebWithRetry(task.instruction, { maxResults: 5 });
     const formatted = formatSearchResults(searchResult);
     let synthesis = formatted;
     try {
-      const s = await callGroqJson(
+      const s = await callLLMJson(
         `Synthesize these search results for: "${task.instruction}"\n\n${formatted}`,
         { maxTokens: 1024, temperature: 0.5, systemPrompt: 'Respond ONLY with JSON: { "summary": "...", "keyFindings": [] }' }
       );
@@ -98,7 +98,7 @@ async function executeSpecialist(workflowId, task, agentType, io) {
   }
 
   if (agentType === 'code') {
-    const result = await callGroqJson(
+    const result = await callLLMJson(
       `Write working code for: "${task.instruction}". Include HTML/CSS/JS if it's a UI task.`,
       { maxTokens: 2048, temperature: 0.4, systemPrompt: 'Respond ONLY with JSON: { "language": "...", "code": "...", "description": "..." }' }
     );
@@ -106,14 +106,14 @@ async function executeSpecialist(workflowId, task, agentType, io) {
   }
 
   if (agentType === 'file') {
-    const result = await callGroqJson(
+    const result = await callLLMJson(
       `Generate content for: "${task.instruction}"`,
       { maxTokens: 2048, temperature: 0.6, systemPrompt: 'Respond ONLY with JSON: { "content": "...", "format": "markdown" }' }
     );
     return result.content || task.instruction;
   }
 
-  const result = await callGroqJson(
+  const result = await callLLMJson(
     `Analyze and provide insights for: "${task.instruction}"`,
     { maxTokens: 1024, temperature: 0.5, systemPrompt: 'Respond ONLY with JSON: { "analysis": "...", "insights": [] }' }
   );
@@ -121,9 +121,9 @@ async function executeSpecialist(workflowId, task, agentType, io) {
 }
 
 async function criticAgent(workflowId, task, output, io) {
-  emitAgentActivity(io, workflowId, 'critic', 'reviewing', { taskId: task.id });
+  emitAgentActivity(io, workflowId, 'critic', 'reviewing', { taskId: task.id, message: 'Reviewing output quality...' });
   try {
-    const result = await callGroqJson(CRITIC_PROMPT(task.instruction, output), { maxTokens: 512, temperature: 0.3 });
+    const result = await callLLMJson(CRITIC_PROMPT(task.instruction, output), { maxTokens: 512, temperature: 0.3 });
     return { approved: result.approved !== false, feedback: result.feedback || '' };
   } catch {
     return { approved: true, feedback: 'auto-approved (critic unavailable)' };
@@ -131,11 +131,11 @@ async function criticAgent(workflowId, task, output, io) {
 }
 
 async function summarizerAgent(workflowId, goal, completedLogs, io) {
-  emitAgentActivity(io, workflowId, 'summarizer', 'compiling', {});
+  emitAgentActivity(io, workflowId, 'summarizer', 'compiling', { message: 'Compiling findings into final report...' });
   emitTaskUpdate(io, workflowId, { stage: 'summarization', message: 'Compiling final report...', progress: 90 });
 
   try {
-    const result = await callGroqJson(SUMMARIZER_PROMPT(goal, completedLogs), { maxTokens: 6000, temperature: 0.6 });
+    const result = await callLLMJson(SUMMARIZER_PROMPT(goal, completedLogs), { maxTokens: 6000, temperature: 0.6 });
     return result.report || result.content || result.summary || completedLogs.map(l => `## ${l.agent}\n${l.output || ''}`).join('\n\n');
   } catch {
     return completedLogs.map(l => `## ${l.agent} — ${l.instruction}\n\n${l.output || 'no output'}`).join('\n\n---\n\n');
@@ -150,7 +150,7 @@ async function runOrchestrator(workflowId, goal, userId) {
     await updateWorkflowStep(workflowId, { status: 'running' });
     emitTaskUpdate(io, workflowId, { stage: 'initialization', message: 'Starting...', progress: 5 });
 
-    const intentCheck = await callGroqJson(
+    const intentCheck = await callLLMJson(
       `User input: "${goal}"
 
 Classify this input:
@@ -228,7 +228,7 @@ Respond ONLY with JSON: { "type": "chat" | "task", "reply": "short conversationa
       await updateWorkflowStep(workflowId, { plan: updatedPlan });
       await appendLog(workflowId, { agent: agentType, action: 'task_completed', taskId: task.id, outputLength: output?.length });
 
-      emitAgentActivity(io, workflowId, agentType, 'task_completed', { taskId: task.id });
+      emitAgentActivity(io, workflowId, agentType, 'task_completed', { taskId: task.id, message: `Task completed: "${task.instruction.substring(0, 60)}..."` });
       await new Promise(r => setTimeout(r, 1000));
     }
 

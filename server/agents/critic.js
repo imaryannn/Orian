@@ -3,7 +3,7 @@
 // ============================================
 // Purpose: Quality assurance and output review
 
-const { callGroqJson } = require('../tools/groq');
+const { callLLMJson } = require('../tools/llm');
 const { CRITIC_SYSTEM_PROMPT, getCriticPrompt } = require('../tools/prompts');
 const { addTaskLog } = require('../db/sqlite');
 const { emitAgentActivity } = require('../sockets/socket');
@@ -23,6 +23,7 @@ async function runCritic(goalId, output, originalGoal, io = null) {
     // Emit activity
     emitAgentActivity(io, goalId, 'critic', 'review_starting', {
       outputLength: output.length,
+      message: 'Reviewing output quality...',
     });
 
     // Log to database
@@ -31,11 +32,10 @@ async function runCritic(goalId, output, originalGoal, io = null) {
     // Generate criticism prompt
     const prompt = getCriticPrompt(output, originalGoal);
 
-    console.log('[CRITIC] Calling Groq for assessment...');
+    console.log('[CRITIC] Calling LLM for assessment...');
 
-    // Call Groq for review
-    const assessment = await callGroqJson(prompt, {
-      model: process.env.GROQ_MODEL || 'mixtral-8x7b-32768',
+    // Call LLM for review
+    const assessment = await callLLMJson(prompt, {
       maxTokens: 2048,
       temperature: 0.5,
       systemPrompt: CRITIC_SYSTEM_PROMPT,
@@ -45,7 +45,7 @@ async function runCritic(goalId, output, originalGoal, io = null) {
 
     // Validate assessment structure
     if (assessment.score === undefined || !assessment.status) {
-      throw new Error('Invalid assessment format from Groq');
+      throw new Error('Invalid assessment format from LLM');
     }
 
     // Add metadata
@@ -73,6 +73,7 @@ async function runCritic(goalId, output, originalGoal, io = null) {
     emitAgentActivity(io, goalId, 'critic', 'assessment_complete', {
       status: result.status,
       score: result.score,
+      message: `Review complete: ${result.status} (score: ${result.score})`,
     });
 
     // Log assessment details

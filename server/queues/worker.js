@@ -30,7 +30,7 @@ async function startWorker(socketIoInstance) {
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
       enableOfflineQueue: true,
-      tls: redisUrl.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
+      tls: redisUrl.startsWith('rediss://') ? {} : undefined,
     });
 
     // Create worker
@@ -85,11 +85,11 @@ async function startWorker(socketIoInstance) {
  * @returns {Promise<Object>} - Job result
  */
 async function processJob(job, io) {
-  const { goalId, goal, description, userId } = job.data;
+  const { goalId, goal, description, userId, context, workspace } = job.data;
 
   try {
     await job.updateProgress(5);
-    const result = await executeGoal(goalId, { goal, description, userId }, io);
+    const result = await executeGoal(goalId, { goal, description, userId, context, workspace }, io);
 
     // Complete with final progress
     await job.updateProgress(100);
@@ -102,6 +102,7 @@ async function processJob(job, io) {
       result,
     };
   } catch (error) {
+    if (error.code === 'cancelled') return { goalId, cancelled: true };
     console.error(`[WORKER] ✗ Job failed: ${error.message}`);
 
     try {

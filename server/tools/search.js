@@ -33,7 +33,7 @@ async function searchWeb(query, options = {}) {
     max_results: maxResults,
     include_answer: includeAnswer,
     include_images: includeImages,
-    search_depth: 'advanced',
+    search_depth: 'basic',
   };
 
   return new Promise((resolve, reject) => {

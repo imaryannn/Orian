@@ -1,37 +1,148 @@
 import React, { useState } from 'react';
+import { SignIn, SignUp } from '@clerk/react';
 import './AuthModal.css';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://orian-ondq.onrender.com';
+const FONT = "'Instrument Serif', 'Playfair Display', Georgia, serif";
 
-function AuthModal({ onAuth }) {
+const clerkAppearance = {
+  variables: {
+    colorPrimary: '#0a0a0a',
+    colorPrimaryForeground: '#ffffff',
+    colorForeground: '#0a0a0a',
+    colorMutedForeground: '#777777',
+    colorBackground: 'transparent',
+    colorInput: 'rgba(255, 255, 255, 0.8)',
+    colorInputForeground: '#0a0a0a',
+    colorBorder: 'rgba(0, 0, 0, 0.15)',
+    colorDanger: '#c0392b',
+    colorRing: 'rgba(0, 0, 0, 0.35)',
+    colorShadow: 'rgba(0, 0, 0, 0.08)',
+    fontFamily: FONT,
+    fontFamilyButtons: FONT,
+    borderRadius: '12px',
+    fontSize: '0.95rem',
+  },
+  elements: {
+    rootBox: { width: '100%', maxWidth: '100%' },
+    cardBox: {
+      width: '100%',
+      maxWidth: '100%',
+      background: 'transparent',
+      boxShadow: 'none',
+      border: 'none',
+      borderRadius: '0px',
+      overflow: 'visible',
+    },
+    card: {
+      width: '100%',
+      background: 'transparent',
+      boxShadow: 'none',
+      border: 'none',
+      padding: '0',
+      margin: '0',
+    },
+    logoBox: { display: 'none' },
+    header: { display: 'none' },
+    headerTitle: { display: 'none' },
+    headerSubtitle: { display: 'none' },
+    main: { width: '100%' },
+    footer: { display: 'none' },
+    socialButtonsRoot: { gap: '0.6rem' },
+    socialButtonsBlockButton: {
+      width: '100%',
+      boxSizing: 'border-box',
+      borderRadius: '12px',
+      border: '1px solid rgba(0, 0, 0, 0.15)',
+      backgroundColor: 'rgba(255, 255, 255, 0.8)',
+      color: '#0a0a0a',
+      textTransform: 'lowercase',
+      fontFamily: FONT,
+      fontSize: '0.9rem',
+      boxShadow: 'none',
+      '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.95)', borderColor: 'rgba(0, 0, 0, 0.3)' },
+    },
+    socialButtonsBlockButtonText: { fontFamily: FONT, textTransform: 'lowercase', fontWeight: '500' },
+    dividerRow: { margin: '1.1rem 0' },
+    dividerLine: { backgroundColor: 'rgba(0, 0, 0, 0.12)' },
+    dividerText: { color: '#777777', fontFamily: FONT, fontSize: '0.75rem', textTransform: 'lowercase' },
+    formFieldLabel: {
+      color: '#555555',
+      fontFamily: FONT,
+      fontSize: '0.8rem',
+      fontWeight: '600',
+      textTransform: 'lowercase',
+    },
+    formFieldInput: {
+      width: '100%',
+      boxSizing: 'border-box',
+      borderRadius: '12px',
+      borderColor: 'rgba(0, 0, 0, 0.15)',
+      backgroundColor: 'rgba(255, 255, 255, 0.8)',
+      color: '#0a0a0a',
+      fontFamily: FONT,
+      fontSize: '0.95rem',
+      padding: '0.75rem 1rem',
+      textTransform: 'lowercase',
+      '&:focus': { borderColor: 'rgba(0, 0, 0, 0.35)', boxShadow: 'none' },
+    },
+    formFieldInputShowPasswordButton: { color: '#777777' },
+    formFieldAction: {
+      color: '#0a0a0a',
+      fontFamily: FONT,
+      fontSize: '0.8rem',
+      textTransform: 'lowercase',
+      textDecoration: 'underline',
+      textUnderlineOffset: '3px',
+    },
+    formFieldErrorText: { color: '#c0392b', fontFamily: FONT, fontSize: '0.8rem', textTransform: 'lowercase' },
+    formFieldHintText: { color: '#999999', fontFamily: FONT, fontSize: '0.75rem', textTransform: 'lowercase' },
+    formButtonPrimary: {
+      width: '100%',
+      boxSizing: 'border-box',
+      backgroundColor: '#0a0a0a',
+      color: '#ffffff',
+      borderRadius: '12px',
+      border: 'none',
+      boxShadow: 'none',
+      fontFamily: FONT,
+      fontSize: '0.95rem',
+      fontWeight: '600',
+      textTransform: 'lowercase',
+      padding: '0.85rem 1rem',
+      marginTop: '0.25rem',
+      '&:hover': { backgroundColor: '#0a0a0a', opacity: '0.85' },
+      '&:active': { opacity: '0.7' },
+      '&:disabled': { opacity: '0.4' },
+    },
+    formButtonReset: { color: '#777777', fontFamily: FONT, textTransform: 'lowercase' },
+    alert: {
+      backgroundColor: 'rgba(192, 57, 43, 0.06)',
+      border: '1px solid rgba(192, 57, 43, 0.2)',
+      borderRadius: '12px',
+    },
+    alertText: { color: '#c0392b', fontFamily: FONT, fontSize: '0.8rem', textTransform: 'lowercase' },
+    identityPreview: {
+      borderRadius: '12px',
+      border: '1px solid rgba(0, 0, 0, 0.12)',
+      backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    },
+    identityPreviewText: { color: '#0a0a0a', fontFamily: FONT, textTransform: 'lowercase' },
+    identityPreviewEditButton: { color: '#0a0a0a' },
+    otpCodeFieldInput: {
+      borderRadius: '12px',
+      borderColor: 'rgba(0, 0, 0, 0.15)',
+      backgroundColor: 'rgba(255, 255, 255, 0.8)',
+      color: '#0a0a0a',
+      fontFamily: FONT,
+    },
+    formResendCodeLink: { color: '#0a0a0a', fontFamily: FONT, textTransform: 'lowercase' },
+    badge: { fontFamily: FONT, textTransform: 'lowercase' },
+    lastAuthenticationStrategyBadge: { display: 'none' },
+  },
+};
+
+function AuthModal() {
   const [mode, setMode] = useState('login');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-    try {
-      const res = await fetch(`${BACKEND_URL}/auth/${mode}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, name }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error); return; }
-      localStorage.setItem('orian_token', data.token);
-      localStorage.setItem('orian_user', JSON.stringify(data.user));
-      onAuth(data.user, data.token);
-    } catch {
-      setError('failed to connect to server');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
     <div className="auth-overlay">
@@ -44,20 +155,16 @@ function AuthModal({ onAuth }) {
           <span>orian</span>
         </div>
         <h2 className="auth-title">{mode === 'login' ? 'welcome back' : 'create account'}</h2>
-        <form onSubmit={handleSubmit} className="auth-form">
-          {mode === 'register' && (
-            <input className="auth-input" type="text" placeholder="name" value={name} onChange={e => setName(e.target.value)} />
+        <div className="auth-clerk">
+          {mode === 'login' ? (
+            <SignIn routing="hash" appearance={clerkAppearance} fallbackRedirectUrl="/" />
+          ) : (
+            <SignUp routing="hash" appearance={clerkAppearance} fallbackRedirectUrl="/" />
           )}
-          <input className="auth-input" type="email" placeholder="email" value={email} onChange={e => setEmail(e.target.value)} required />
-          <input className="auth-input" type="password" placeholder="password" value={password} onChange={e => setPassword(e.target.value)} required />
-          {error && <p className="auth-error">{error}</p>}
-          <button className="auth-submit" type="submit" disabled={loading}>
-            {loading ? '...' : mode === 'login' ? 'sign in' : 'sign up'}
-          </button>
-        </form>
+        </div>
         <p className="auth-switch">
           {mode === 'login' ? "don't have an account?" : 'already have an account?'}
-          <button onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}>
+          <button onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
             {mode === 'login' ? 'sign up' : 'sign in'}
           </button>
         </p>

@@ -3,11 +3,11 @@
 // ============================================
 // Purpose: Break down high-level goals into actionable subtasks
 
-const { callGroqJson } = require('../tools/groq');
+const { callLLMJson } = require('../tools/llm');
 const { PLANNER_SYSTEM_PROMPT, getPlannerPrompt } = require('../tools/prompts');
 const { addTaskLog } = require('../db/sqlite');
 const { emitAgentActivity } = require('../sockets/socket');
-const { listIntegrations } = require('../db/integrations');
+const { getConnectedProviderIds } = require('../services/composio');
 
 /**
  * Run the planner agent
@@ -17,24 +17,29 @@ const { listIntegrations } = require('../db/integrations');
  * @param {Object} io - Socket.io instance for live updates
  * @returns {Promise<Object>} - Plan with subtasks
  */
-async function runPlanner(goalId, goal, description = '', io = null, userId = null) {
+async function runPlanner(goalId, goal, description = '', io = null, userId = null, context = []) {
   try {
     console.log(`[PLANNER] Starting plan generation for goal: "${goal}"`);
 
-    emitAgentActivity(io, goalId, 'planner', 'analyzing_goal', { goal, description });
+    emitAgentActivity(io, goalId, 'planner', 'analyzing_goal', { goal, description, message: `Analyzing goal: "${goal}"` });
     await addTaskLog(goalId, 'planner_start', 'Planner agent started analyzing goal');
 
-    const integrations = userId ? await listIntegrations(userId) : [];
-    const connectedIntegrations = integrations.map(i => i.provider);
+    let connectedIntegrations = [];
+    if (userId) {
+      try {
+        connectedIntegrations = await getConnectedProviderIds(userId);
+      } catch (e) {
+        console.warn('[PLANNER] integration lookup failed:', e.message);
+      }
+    }
     console.log(`[PLANNER] userId: ${userId}, connected integrations: ${connectedIntegrations.join(', ') || 'none'}`);
 
-    const prompt = getPlannerPrompt(goal, description, connectedIntegrations);
+    const prompt = getPlannerPrompt(goal, description, connectedIntegrations, context);
 
-    console.log(`[PLANNER] Calling Groq with prompt (${prompt.length} chars)`);
+    console.log(`[PLANNER] Calling LLM with prompt (${prompt.length} chars)`);
 
-    // Call Groq to generate plan
-    const plan = await callGroqJson(prompt, {
-      model: process.env.GROQ_MODEL || 'mixtral-8x7b-32768',
+    // Call LLM to generate plan
+    const plan = await callLLMJson(prompt, {
       maxTokens: 2048,
       temperature: 0.7,
       systemPrompt: PLANNER_SYSTEM_PROMPT,
@@ -43,8 +48,8 @@ async function runPlanner(goalId, goal, description = '', io = null, userId = nu
     console.log(`[PLANNER] Plan generated with ${plan.subtasks?.length || 0} subtasks`);
 
     // Validate plan structure
-    if (!plan.subtasks || !Array.isArray(plan.subtasks)) {
-      throw new Error('Invalid plan structure from Groq');
+    if (!validatePlan(plan)) {
+      throw new Error('Invalid plan structure from LLM');
     }
 
     // Log plan details
@@ -70,6 +75,7 @@ async function runPlanner(goalId, goal, description = '', io = null, userId = nu
     emitAgentActivity(io, goalId, 'planner', 'plan_generated', {
       subtaskCount: plan.subtasks.length,
       totalEstimatedTime: plan.total_estimated_time_minutes,
+      message: `Plan ready: ${plan.subtasks.length} subtasks created`,
     });
 
     return plan;
@@ -93,62 +99,32 @@ async function runPlanner(goalId, goal, description = '', io = null, userId = nu
  * @param {Object} plan - Plan object to validate
  * @returns {boolean} - Is valid
  */
-function validatePlan(plan) {
-  if (!plan || typeof plan !== 'object') return false;
-  if (!Array.isArray(plan.subtasks)) return false;
-  if (plan.subtasks.length === 0) return false;
+const TASK_TYPES = ['research', 'generation', 'execution', 'web_search', 'file_generation', 'code_execution', 'analysis', 'notion_action', 'slack_action', 'github_action', 'google_action', 'linear_action', 'airtable_action'];
 
-  // Validate each subtask
-  return plan.subtasks.every((task) => {
-    return (
-      task.id !== undefined &&
-      task.task &&
-      typeof task.task === 'string' &&
-      task.type &&
-      ['research', 'analysis', 'generation', 'execution', 'notion_action', 'slack_action', 'github_action', 'google_action'].includes(task.type) &&
-      Array.isArray(task.depends_on) &&
-      ['high', 'medium', 'low'].includes(task.priority) &&
-      typeof task.estimated_time_minutes === 'number'
-    );
-  });
+function validatePlan(plan) {
+  if (!Array.isArray(plan?.subtasks) || !plan.subtasks.length || plan.subtasks.length > 8) return false;
+  const ids = new Set(plan.subtasks.map(task => task.id));
+  if (ids.size !== plan.subtasks.length) return false;
+  if (!plan.subtasks.every(task => task.id != null && typeof task.task === 'string' && task.task.trim() &&
+    TASK_TYPES.includes(task.type) && Array.isArray(task.depends_on) &&
+    task.depends_on.every(id => ids.has(id) && id !== task.id))) return false;
+  try { getExecutionOrder(plan); return true; } catch (_) { return false; }
 }
 
-/**
- * Get execution order of subtasks respecting dependencies
- * @param {Object} plan - Plan with subtasks
- * @returns {Array<Array<number>>} - Subtask IDs grouped by execution order
- */
 function getExecutionOrder(plan) {
-  if (!plan.subtasks) return [];
-
+  const pending = [...(plan.subtasks || [])];
   const executed = new Set();
-  const executionOrder = [];
-
-  while (executed.size < plan.subtasks.length) {
-    const batch = [];
-
-    for (const task of plan.subtasks) {
-      if (executed.has(task.id)) continue; // Already executed
-
-      // Check if all dependencies are met
-      const dependenciesMet = task.depends_on.every((depId) =>
-        executed.has(depId)
-      );
-
-      if (dependenciesMet) {
-        batch.push(task.id);
-        executed.add(task.id);
-      }
+  const batches = [];
+  while (pending.length) {
+    const batch = pending.filter(task => task.depends_on.every(id => executed.has(id)));
+    if (!batch.length) throw new Error('Circular or missing dependency in plan');
+    batches.push(batch.map(task => task.id));
+    for (const task of batch) {
+      executed.add(task.id);
+      pending.splice(pending.indexOf(task), 1);
     }
-
-    if (batch.length === 0) {
-      throw new Error('Circular dependency detected in plan');
-    }
-
-    executionOrder.push(batch);
   }
-
-  return executionOrder;
+  return batches;
 }
 
 /**

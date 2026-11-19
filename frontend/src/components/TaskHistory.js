@@ -28,7 +28,7 @@ function TaskHistory({ tasks, onSelect }) {
     <div className="taskhistory">
       {tasks && tasks.length > 0 && (
         <>
-          <h3 className="taskhistory-heading">recent tasks</h3>
+          <h3 className="taskhistory-heading">conversations</h3>
           <ul className="taskhistory-list">
             {tasks.map((task) => (
               <li key={task.id} className="taskhistory-item" onClick={() => onSelect?.(task)}>

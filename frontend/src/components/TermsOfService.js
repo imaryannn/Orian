@@ -49,8 +49,8 @@ function TermsOfService({ onBack }) {
 
           <div className="legal-section">
             <h2>5. third-party integrations</h2>
-            <p>orian allows you to connect third-party services (google, github, slack, notion, discord, airtable). by connecting these services you authorize orian to act on your behalf within the scopes you grant. you remain responsible for your use of those third-party services and compliance with their terms.</p>
-            <p>orian is not affiliated with, endorsed by, or sponsored by google, github, slack, notion, discord, or airtable.</p>
+            <p>orian allows you to connect third-party services (google, github, slack, notion, linear, airtable). by connecting these services you authorize orian to act on your behalf within the scopes you grant. you remain responsible for your use of those third-party services and compliance with their terms.</p>
+            <p>orian is not affiliated with, endorsed by, or sponsored by google, github, slack, notion, linear, or airtable.</p>
           </div>
 
           <div className="legal-section">

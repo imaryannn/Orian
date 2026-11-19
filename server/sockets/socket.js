@@ -4,10 +4,14 @@
 // Purpose: Setup real-time bidirectional communication
 // between server and frontend clients
 
-const { taskQueue } = require('../queues/taskQueue');
+const { getGoal, appendGoalActivity } = require('../db/sqlite');
 const { getLogs } = require('../tools/logger');
+const { verifyToken } = require('@clerk/express');
 
 const activeClients = new Map();
+// goalId -> recent agent activity, replayed to clients that subscribe late
+const activityBuffer = new Map();
+const ACTIVITY_BUFFER_LIMIT = 300;
 let _io = null;
 
 function getIO() {
@@ -20,6 +24,21 @@ function getIO() {
  */
 function setupSocket(io) {
   _io = io;
+
+  // Authenticate every handshake with a Clerk session token
+  io.use(async (socket, next) => {
+    try {
+      const token = socket.handshake.auth && socket.handshake.auth.token;
+      if (!token) return next(new Error('unauthorized'));
+      const payload = await verifyToken(token, { secretKey: process.env.CLERK_SECRET_KEY });
+      if (!payload || !payload.sub) return next(new Error('unauthorized'));
+      socket.userId = payload.sub;
+      return next();
+    } catch (_err) {
+      return next(new Error('unauthorized'));
+    }
+  });
+
   // Main connection handler
   io.on('connection', (socket) => {
     const clientId = socket.id;
@@ -39,7 +58,10 @@ function setupSocket(io) {
     /**
      * When client identifies themselves with a goal ID
      */
-    socket.on('subscribe_goal', (goalId) => {
+    socket.on('subscribe_goal', async (goalId) => {
+      try {
+      const goal = typeof goalId === 'string' ? await getGoal(goalId) : null;
+      if (!goal || goal.userId !== socket.userId) return;
       console.log(`[SOCKET] Client ${clientId} subscribed to goal: ${goalId}`);
 
       // Join a room named after the goal ID for broadcasting
@@ -51,12 +73,24 @@ function setupSocket(io) {
         client.activeGoalId = goalId;
       }
 
+      // Replay activity that happened before this client joined the room
+      const buffered = activityBuffer.get(goalId) || goal.activity || [];
+      buffered.forEach((event) => {
+        socket.emit('agent_activity', event);
+      });
+
+      // Replay terminal state too: fast chats may finish before subscription.
+      if (goal.status === 'completed' && goal.result) socket.emit('task_complete', { goalId, result: goal.result });
+      if (goal.status === 'failed') socket.emit('task_error', { goalId, error: goal.result?.error || 'Task failed' });
+      if (goal.status === 'cancelled') socket.emit('task_cancelled', { goalId });
+
       // Send acknowledgment
       socket.emit('subscribed', {
         goalId,
         clientId,
         timestamp: new Date().toISOString(),
       });
+      } catch (error) { console.error('[SOCKET] Subscription failed:', error.message); }
     });
 
     /**
@@ -88,6 +122,8 @@ function setupSocket(io) {
     socket.on('request_logs', async (goalId) => {
       try {
         console.log(`[SOCKET] Client ${clientId} requesting logs for goal: ${goalId}`);
+        const goal = await getGoal(goalId);
+        if (!goal || goal.userId !== socket.userId) return;
         const logs = await getLogs(goalId);
 
         socket.emit('logs_response', {
@@ -129,17 +165,24 @@ function setupSocket(io) {
  * @param {string} goalId - The goal being worked on
  * @param {Object} update - Update object with task details
  */
+function recordActivity(goalId, event) {
+  const buffered = activityBuffer.get(goalId) || [];
+  buffered.push(event);
+  if (buffered.length > ACTIVITY_BUFFER_LIMIT) buffered.shift();
+  activityBuffer.set(goalId, buffered);
+  appendGoalActivity(goalId, event).catch(error => console.error('[ACTIVITY]', error.message));
+}
+
 function emitTaskUpdate(io, goalId, update) {
-  if (!io) return;
-
-  console.log(`[SOCKET] Emitting update for goal ${goalId}:`, update.stage);
-
-  // Broadcast to all clients in this goal's room
-  io.to(`goal:${goalId}`).emit('task_update', {
-    goalId,
-    ...update,
+  const agentByStage = { initialization: 'assistant', understanding: 'assistant', planning: 'planner', planning_complete: 'planner', routing: 'router', routing_complete: 'router', execution_complete: 'assistant', synthesis: 'file_agent', report_generated: 'file_agent', quality_review: 'critic', quality_complete: 'critic', summarization: 'summarizer' };
+  const event = {
+    id: require('crypto').randomUUID(), goalId, agent: update.agent || agentByStage[update.stage] || 'system',
+    action: update.stage, data: { message: update.message, progress: update.progress, currentTask: update.currentTask },
     timestamp: new Date().toISOString(),
-  });
+  };
+  recordActivity(goalId, event);
+  io?.to(`goal:${goalId}`).emit('agent_activity', event);
+  io?.to(`goal:${goalId}`).emit('task_update', { goalId, ...update, timestamp: event.timestamp });
 }
 
 /**
@@ -150,17 +193,9 @@ function emitTaskUpdate(io, goalId, update) {
  * @param {Object} data - Additional data
  */
 function emitAgentActivity(io, goalId, agentName, action, data = {}) {
-  if (!io) return;
-
-  console.log(`[SOCKET] Agent ${agentName} - ${action}`);
-
-  io.to(`goal:${goalId}`).emit('agent_activity', {
-    goalId,
-    agent: agentName,
-    action,
-    data,
-    timestamp: new Date().toISOString(),
-  });
+  const event = { id: require('crypto').randomUUID(), goalId, agent: agentName, action, data, timestamp: new Date().toISOString() };
+  recordActivity(goalId, event);
+  io?.to(`goal:${goalId}`).emit('agent_activity', event);
 }
 
 /**
@@ -180,6 +215,9 @@ function emitError(io, goalId, errorMessage, details = {}) {
     details,
     timestamp: new Date().toISOString(),
   });
+
+  const cleanup = setTimeout(() => activityBuffer.delete(goalId), 60000);
+  cleanup.unref?.();
 }
 
 /**
@@ -197,6 +235,9 @@ function emitTaskComplete(io, goalId, result) {
     result,
     timestamp: new Date().toISOString(),
   });
+
+  const cleanup = setTimeout(() => activityBuffer.delete(goalId), 60000);
+  cleanup.unref?.();
 }
 
 /**

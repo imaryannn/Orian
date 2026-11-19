@@ -1,15 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
+import ModelSelector from './ModelSelector';
 import './GoalForm.css';
 
 const CHIPS = [
-  'research top ai startups in india',
-  'write a market analysis on ev industry',
-  'summarize the latest news on openai',
-  'find top 5 open source llms in 2024',
-  'create a competitor analysis for notion',
+  'build a personal portfolio website',
+  'create a weekly planner in Notion',
+  'write a project proposal in Google Docs',
+  'compare free AI coding models with sources',
+  'explain how APIs work with a simple example',
 ];
 
-function GoalForm({ onSubmit }) {
+function GoalForm({ onSubmit, getToken }) {
   const [goal, setGoal] = useState('');
   const [mounted, setMounted] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -79,13 +80,18 @@ function GoalForm({ onSubmit }) {
             onKeyDown={handleKeyDown}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            placeholder="e.g., find the top 10 ai startups in india and create a summary report"
+            placeholder="e.g., build a personal portfolio website with a dark theme"
             rows="1"
           />
-          <button onClick={handleSubmit} disabled={!goal.trim()} className={`goalform-send-btn ${goal.trim() ? 'has-text' : ''}`}>
-            <span className="goalform-send-arrow">↗</span>
-            <span className="goalform-send-label">run</span>
-          </button>
+          <div className="goalform-bar-foot">
+            <div className="goalform-bar-foot-left">
+              <ModelSelector getToken={getToken} />
+            </div>
+            <button onClick={handleSubmit} disabled={!goal.trim()} className={`goalform-send-btn ${goal.trim() ? 'has-text' : ''}`}>
+              <span className="goalform-send-arrow">↗</span>
+              <span className="goalform-send-label">run</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

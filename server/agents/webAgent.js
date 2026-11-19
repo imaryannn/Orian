@@ -4,7 +4,7 @@
 // Purpose: Research and information gathering via web search
 
 const { searchWebWithRetry, formatSearchResults } = require('../tools/search');
-const { callGroqJson } = require('../tools/groq');
+const { callLLMJson } = require('../tools/llm');
 const { WEB_AGENT_SYSTEM_PROMPT, getWebAgentPrompt } = require('../tools/prompts');
 const { addTaskLog } = require('../db/sqlite');
 const { emitAgentActivity } = require('../sockets/socket');
@@ -26,6 +26,7 @@ async function runWebAgent(goalId, searchQuery, options = {}, io = null) {
     // Emit activity
     emitAgentActivity(io, goalId, 'web_agent', 'search_starting', {
       query: searchQuery,
+      message: `Searching the web for "${searchQuery}"...`,
     });
 
     // Log to database
@@ -46,6 +47,7 @@ async function runWebAgent(goalId, searchQuery, options = {}, io = null) {
     // Emit search complete
     emitAgentActivity(io, goalId, 'web_agent', 'search_complete', {
       resultCount: searchResult.results.length,
+      message: `Found ${searchResult.results.length} results, analyzing...`,
     });
 
     // Format results
@@ -61,14 +63,13 @@ async function runWebAgent(goalId, searchQuery, options = {}, io = null) {
 
     let synthesis;
     try {
-      synthesis = await callGroqJson(synthesisPrompt, {
-        model: process.env.GROQ_MODEL || 'mixtral-8x7b-32768',
+      synthesis = await callLLMJson(synthesisPrompt, {
         maxTokens: 2048,
         temperature: 0.5,
         systemPrompt: WEB_AGENT_SYSTEM_PROMPT,
       });
-    } catch (groqErr) {
-      console.warn('[WEB_AGENT] Groq synthesis failed, using raw results:', groqErr.message);
+    } catch (llmErr) {
+      console.warn('[WEB_AGENT] LLM synthesis failed, using raw results:', llmErr.message);
       synthesis = { summary: formattedResults?.toString() || searchQuery, keyFindings: [], sources: [] };
     }
 
@@ -100,6 +101,7 @@ async function runWebAgent(goalId, searchQuery, options = {}, io = null) {
     // Emit completion
     emitAgentActivity(io, goalId, 'web_agent', 'synthesis_complete', {
       sourceCount: findings.sources.length,
+      message: `Synthesized ${findings.sources.length} sources into findings`,
     });
 
     return findings;
@@ -166,7 +168,7 @@ ${content}
 
 Return as JSON with relevant keys.`;
 
-    const extracted = await callGroqJson(extractionPrompt, {
+    const extracted = await callLLMJson(extractionPrompt, {
       maxTokens: 1024,
       temperature: 0.3,
     });
@@ -198,7 +200,7 @@ ${resultsSummary}
 
 Provide a detailed comparison highlighting differences, similarities, and key insights.`;
 
-    const comparison = await callGroqJson(comparisonPrompt, {
+    const comparison = await callLLMJson(comparisonPrompt, {
       maxTokens: 1500,
       temperature: 0.5,
     });

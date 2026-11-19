@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './Integrations.css';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://orian-ondq.onrender.com';
+import { BACKEND_URL } from '../config';
 
 const NotionIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -33,101 +33,128 @@ const LinearIcon = () => (
   </svg>
 );
 
-const DiscordIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057c.002.022.015.043.03.056a19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
-  </svg>
-);
-
 const AirtableIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
     <path d="M11.955.592 1.342 4.75a.923.923 0 0 0 .008 1.714l10.64 4.048a2.772 2.772 0 0 0 1.978 0l10.64-4.048a.923.923 0 0 0 .008-1.714L13.977.592a2.772 2.772 0 0 0-2.022 0M1.002 8.01v7.477c0 .51.331.96.818 1.11l9.97 3.046a2.772 2.772 0 0 0 1.62 0l9.97-3.046a1.17 1.17 0 0 0 .818-1.11V8.01a.468.468 0 0 0-.611-.444l-10.61 3.237a2.772 2.772 0 0 1-1.614 0L1.613 7.566A.468.468 0 0 0 1 8.01"/>
   </svg>
 );
 
-const WebhookIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-  </svg>
-);
+const ICONS = {
+  notion: NotionIcon,
+  slack: SlackIcon,
+  google: GoogleIcon,
+  github: GitHubIcon,
+  linear: LinearIcon,
+  airtable: AirtableIcon,
+};
 
-const PROVIDERS = [
-  { id: 'notion', label: 'notion', Icon: NotionIcon, oauth: true },
-  { id: 'slack', label: 'slack', Icon: SlackIcon, oauth: true },
-  { id: 'google', label: 'google docs', Icon: GoogleIcon, oauth: true },
-  { id: 'github', label: 'github', Icon: GitHubIcon, oauth: true },
-  { id: 'discord', label: 'discord', Icon: DiscordIcon, oauth: false },
-  { id: 'airtable', label: 'airtable', Icon: AirtableIcon, oauth: false },
-  { id: 'webhook', label: 'webhook', Icon: WebhookIcon, oauth: false },
-];
-
-function Integrations({ token }) {
-  const [connected, setConnected] = useState({});
+function Integrations({ getToken }) {
+  const [error, setError] = useState('');
+  const [configured, setConfigured] = useState(true);
+  const [providers, setProviders] = useState([]);
   const [expanded, setExpanded] = useState(null);
   const [inputs, setInputs] = useState({});
 
-  const authHeader = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
-
   const fetchStatus = useCallback(async () => {
-    if (!token) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/integrations/list`, { headers: authHeader });
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch(`${BACKEND_URL}/integrations/list`, {
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
       const data = await res.json();
-      const map = {};
-      (data.integrations || []).forEach(i => { map[i.provider] = true; });
-      setConnected(map);
-    } catch (_) {}
-  }, [token]);
+      if (!res.ok) {
+        console.error('[INTEGRATIONS]', data.error || res.status);
+        return;
+      }
+      setConfigured(Boolean(data.configured));
+      setProviders(data.providers || []);
+      setInputs(prev => {
+        const next = { ...prev };
+        (data.providers || []).forEach(p => {
+          if (!next[p.id] && p.config && Object.keys(p.config).length > 0) {
+            next[p.id] = { ...p.config };
+          }
+        });
+        return next;
+      });
+    } catch (e) {
+      console.error('[INTEGRATIONS]', e.message);
+    }
+  }, [getToken]);
 
   useEffect(() => {
     fetchStatus();
     const handler = (e) => {
+      if (e.origin !== new URL(BACKEND_URL).origin) return;
       if (e.data?.type === 'oauth_success') fetchStatus();
-      if (e.data?.type === 'oauth_error') console.error('[OAUTH ERROR]', e.data.error);
+      if (e.data?.type === 'oauth_error') setError(String(e.data.error || 'Connection failed'));
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
   }, [fetchStatus]);
 
-  const connectOAuth = (providerId) => {
-    window.open(`${BACKEND_URL}/auth/${providerId}?token=${token}`, `connect_${providerId}`, 'width=600,height=700,left=200,top=100');
-  };
-
-  const connectManual = async (providerId) => {
-    const vals = inputs[providerId] || {};
-    let endpoint, body;
-    if (providerId === 'discord') {
-      if (!vals.webhookUrl) return;
-      endpoint = '/integrations/discord/connect';
-      body = { webhookUrl: vals.webhookUrl };
-    } else if (providerId === 'airtable') {
-      if (!vals.apiKey || !vals.baseId) return;
-      endpoint = '/integrations/airtable/connect';
-      body = { apiKey: vals.apiKey, baseId: vals.baseId, table: vals.table || 'Reports', extraFields: vals.extraFields || '' };
-    } else if (providerId === 'webhook') {
-      if (!vals.webhookUrl) return;
-      endpoint = '/integrations/webhook/connect';
-      body = { webhookUrl: vals.webhookUrl, headers: vals.headers || '' };
-    } else if (providerId === 'github-config') {
-      endpoint = '/integrations/github/config';
-      body = { owner: vals.owner || '', repo: vals.repo || '', labels: vals.labels || '' };
-    } else if (providerId === 'slack-config') {
-      endpoint = '/integrations/slack/config';
-      body = { channelId: vals.channelId || '' };
-    }
+  const connect = async (providerId) => {
+    setError('');
+    const popup = window.open('about:blank', `connect_${providerId}`, 'width=600,height=700,left=200,top=100');
+    if (!popup) { setError('Allow popups to connect an app.'); return; }
     try {
-      await fetch(`${BACKEND_URL}${endpoint}`, { method: 'POST', headers: authHeader, body: JSON.stringify(body) });
-      setConnected(prev => ({ ...prev, [providerId.replace('-config', '')]: true }));
-      setExpanded(null);
-    } catch (_) {}
+      const token = await getToken();
+      if (!token) throw new Error('Please sign in again.');
+      const res = await fetch(`${BACKEND_URL}/integrations/connect`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: providerId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.redirectUrl) throw new Error(data.error || 'Could not start connection');
+      popup.location.href = data.redirectUrl;
+      const timer = setInterval(() => {
+        if (popup.closed) { clearInterval(timer); fetchStatus(); }
+      }, 1000);
+      setTimeout(() => clearInterval(timer), 15 * 60 * 1000);
+    } catch (e) {
+      popup.close();
+      setError(e.message);
+    }
   };
 
   const disconnect = async (providerId) => {
     try {
-      await fetch(`${BACKEND_URL}/integrations/${providerId}`, { method: 'DELETE', headers: authHeader });
-      setConnected(prev => ({ ...prev, [providerId]: false }));
-    } catch (_) {}
+      const token = await getToken();
+      if (!token) return;
+      const response = await fetch(`${BACKEND_URL}/integrations/${providerId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error('Could not disconnect app');
+      setProviders(prev => prev.map(p => p.id === providerId
+        ? { ...p, connected: false, status: 'NOT_CONNECTED', connectedAccountId: null }
+        : p));
+      setExpanded(null);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const saveProviderConfig = async (providerId) => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch(`${BACKEND_URL}/integrations/${providerId}/config`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: inputs[providerId] || {} }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || 'Could not save settings');
+        return;
+      }
+      setExpanded(null);
+    } catch (e) {
+      console.error('[CONFIG ERROR]', e.message);
+    }
   };
 
   const setInput = (provider, key, value) => {
@@ -137,70 +164,62 @@ function Integrations({ token }) {
   return (
     <div className="integrations">
       <p className="integrations-label">integrations</p>
+      {error && <p role="alert" style={{ fontSize: '0.8rem', color: '#b42318' }}>{error}</p>}
+      {!configured && (
+        <div className="integration-row">
+          <span className="integration-name">composio not configured</span>
+        </div>
+      )}
       <div className="integrations-list">
-        {PROVIDERS.map(p => (
-          <div key={p.id} className="integration-item">
-            <div className="integration-row">
-              <span className="integration-icon"><p.Icon /></span>
-              <span className="integration-name">{p.label}</span>
-              {connected[p.id] ? (
-                <div style={{ display: 'flex', gap: '0.3rem' }}>
-                  {(p.id === 'github' || p.id === 'slack') && (
-                    <button className="integration-btn" onClick={() => setExpanded(expanded === `${p.id}-config` ? null : `${p.id}-config`)}>config</button>
-                  )}
-                  <button className="integration-btn connected" onClick={() => disconnect(p.id)}>
-                    <span className="integration-dot" /> connected
+        {providers.map(p => {
+          const Icon = ICONS[p.id];
+          const settings = p.settings || [];
+          return (
+            <div key={p.id} className="integration-item">
+              <div className="integration-row">
+                <span className="integration-icon">{Icon ? <Icon /> : null}</span>
+                <span className="integration-name">{p.label}</span>
+                {p.connected ? (
+                  <div style={{ display: 'flex', gap: '0.3rem' }}>
+                    {settings.length > 0 && (
+                      <button
+                        className="integration-btn"
+                        onClick={() => setExpanded(expanded === `${p.id}-config` ? null : `${p.id}-config`)}
+                      >
+                        {expanded === `${p.id}-config` ? 'close' : 'config'}
+                      </button>
+                    )}
+                    <button className="integration-btn connected" onClick={() => disconnect(p.id)}>
+                      <span className="integration-dot" /> connected
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="integration-btn"
+                    disabled={!configured}
+                    style={!configured ? { opacity: 0.4, cursor: 'default' } : undefined}
+                    onClick={() => connect(p.id)}
+                  >
+                    connect
                   </button>
+                )}
+              </div>
+              {expanded === `${p.id}-config` && p.connected && settings.length > 0 && (
+                <div className="integration-form">
+                  {settings.map(s => (
+                    <input
+                      key={s.key}
+                      placeholder={s.placeholder}
+                      value={(inputs[p.id] && inputs[p.id][s.key]) || ''}
+                      onChange={e => setInput(p.id, s.key, e.target.value)}
+                    />
+                  ))}
+                  <button className="integration-save-btn" onClick={() => saveProviderConfig(p.id)}>save</button>
                 </div>
-              ) : p.oauth ? (
-                <button className="integration-btn" onClick={() => connectOAuth(p.id)}>connect</button>
-              ) : (
-                <button className="integration-btn" onClick={() => setExpanded(expanded === p.id ? null : p.id)}>
-                  {expanded === p.id ? 'cancel' : 'connect'}
-                </button>
               )}
             </div>
-            {expanded === p.id && !connected[p.id] && (
-              <div className="integration-form">
-                {p.id === 'discord' && (
-                  <input placeholder="webhook url" value={inputs.discord?.webhookUrl || ''} onChange={e => setInput('discord', 'webhookUrl', e.target.value)} />
-                )}
-                {p.id === 'airtable' && (
-                  <>
-                    <input placeholder="api key" value={inputs.airtable?.apiKey || ''} onChange={e => setInput('airtable', 'apiKey', e.target.value)} />
-                    <input placeholder="base id" value={inputs.airtable?.baseId || ''} onChange={e => setInput('airtable', 'baseId', e.target.value)} />
-                    <input placeholder="table name (default: Reports)" value={inputs.airtable?.table || ''} onChange={e => setInput('airtable', 'table', e.target.value)} />
-                    <input placeholder='extra fields JSON (optional)' value={inputs.airtable?.extraFields || ''} onChange={e => setInput('airtable', 'extraFields', e.target.value)} />
-                  </>
-                )}
-                {p.id === 'webhook' && (
-                  <>
-                    <input placeholder="webhook url" value={inputs.webhook?.webhookUrl || ''} onChange={e => setInput('webhook', 'webhookUrl', e.target.value)} />
-                    <input placeholder='custom headers JSON (optional)' value={inputs.webhook?.headers || ''} onChange={e => setInput('webhook', 'headers', e.target.value)} />
-                  </>
-                )}
-                <button className="integration-save-btn" onClick={() => connectManual(p.id)}>save</button>
-              </div>
-            )}
-            {expanded === `${p.id}-config` && connected[p.id] && (
-              <div className="integration-form">
-                {p.id === 'github' && (
-                  <>
-                    <input placeholder="owner (github username/org)" value={inputs['github-config']?.owner || ''} onChange={e => setInput('github-config', 'owner', e.target.value)} />
-                    <input placeholder="repo name" value={inputs['github-config']?.repo || ''} onChange={e => setInput('github-config', 'repo', e.target.value)} />
-                    <input placeholder="branch (default: main)" value={inputs['github-config']?.branch || ''} onChange={e => setInput('github-config', 'branch', e.target.value)} />
-                    <input placeholder="commit path e.g. reports/{timestamp}.md" value={inputs['github-config']?.commitPath || ''} onChange={e => setInput('github-config', 'commitPath', e.target.value)} />
-                    <input placeholder="labels (comma separated, optional)" value={inputs['github-config']?.labels || ''} onChange={e => setInput('github-config', 'labels', e.target.value)} />
-                  </>
-                )}
-                {p.id === 'slack' && (
-                  <input placeholder="channel id (e.g. C01234ABCDE)" value={inputs['slack-config']?.channelId || ''} onChange={e => setInput('slack-config', 'channelId', e.target.value)} />
-                )}
-                <button className="integration-save-btn" onClick={() => connectManual(`${p.id}-config`)}>save</button>
-              </div>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

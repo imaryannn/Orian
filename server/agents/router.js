@@ -3,13 +3,13 @@
 // ============================================
 // Purpose: Route tasks to appropriate specialist agents
 
-const { callGroqJson } = require('../tools/groq');
+const { callLLMJson } = require('../tools/llm');
 const { ROUTER_SYSTEM_PROMPT, getRouterPrompt } = require('../tools/prompts');
 const { addTaskLog } = require('../db/sqlite');
 const { emitAgentActivity } = require('../sockets/socket');
 
 // Valid agent types
-const VALID_AGENTS = ['web_search', 'file_generation', 'code_execution', 'analysis', 'notion_action', 'slack_action', 'github_action', 'google_action'];
+const VALID_AGENTS = ['web_search', 'file_generation', 'code_execution', 'analysis', 'notion_action', 'slack_action', 'github_action', 'google_action', 'linear_action', 'airtable_action'];
 
 /**
  * Route a task to the appropriate specialist agent
@@ -18,15 +18,17 @@ const VALID_AGENTS = ['web_search', 'file_generation', 'code_execution', 'analys
  * @param {Object} io - Socket.io instance
  * @returns {Promise<Object>} - Routing decision with agent assignment
  */
-const ACTION_AGENTS = ['notion_action', 'slack_action', 'github_action', 'google_action'];
+const ACTION_AGENTS = ['notion_action', 'slack_action', 'github_action', 'google_action', 'linear_action', 'airtable_action'];
 
 async function routeTask(goalId, task, io = null) {
   try {
-    if (ACTION_AGENTS.includes(task.type)) {
+    const knownType = { research: 'web_search', generation: 'file_generation', execution: 'code_execution' }[task.type] || task.type;
+    if (VALID_AGENTS.includes(knownType)) {
+      emitAgentActivity(io, goalId, 'router', 'task_routed', { taskId: task.id, agentType: knownType, message: `Assigned to ${knownType} agent` });
       return {
         taskId: task.id,
         taskDescription: task.task,
-        assignedAgent: task.type,
+        assignedAgent: knownType,
         confidence: 1,
         reason: 'direct action task',
         parameters: {},
@@ -39,6 +41,7 @@ async function routeTask(goalId, task, io = null) {
       taskId: task.id,
       taskDescription: task.task,
       taskType: task.type,
+      message: `Routing task: "${task.task.substring(0, 60)}..."`,
     });
 
     // Log to database
@@ -51,9 +54,8 @@ async function routeTask(goalId, task, io = null) {
     // Generate routing prompt
     const prompt = getRouterPrompt(task.task);
 
-    // Call Groq for routing decision
-    const routing = await callGroqJson(prompt, {
-      model: process.env.GROQ_MODEL || 'mixtral-8x7b-32768',
+    // Call LLM for routing decision
+    const routing = await callLLMJson(prompt, {
       maxTokens: 1024,
       temperature: 0.5,
       systemPrompt: ROUTER_SYSTEM_PROMPT,
@@ -100,6 +102,7 @@ async function routeTask(goalId, task, io = null) {
       taskId: task.id,
       agent: routing.agent,
       confidence: routing.confidence,
+      message: `Assigned to ${routing.agent} agent`,
     });
 
     return result;

@@ -5,7 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { callGroqJson } = require('../tools/groq');
+const { callLLMJson } = require('../tools/llm');
 const { FILE_AGENT_SYSTEM_PROMPT, getFileAgentPrompt } = require('../tools/prompts');
 const { addTaskLog, addFile } = require('../db/sqlite');
 const { emitAgentActivity } = require('../sockets/socket');
@@ -48,8 +48,8 @@ async function runFileAgent(goalId, content, options = {}, io = null) {
       `Generating file: ${filename}`
     );
 
-    // Generate file content using Groq
-    console.log('[FILE_AGENT] Calling Groq to structure content...');
+    // Generate file content using LLM
+    console.log('[FILE_AGENT] Calling LLM to structure content...');
 
     const generationPrompt = getFileAgentPrompt(content, format, title);
 
@@ -58,8 +58,7 @@ async function runFileAgent(goalId, content, options = {}, io = null) {
     let fileFormat = format;
 
     try {
-      const fileData = await callGroqJson(generationPrompt, {
-        model: process.env.GROQ_MODEL || 'mixtral-8x7b-32768',
+      const fileData = options.structure === false ? { content } : await callLLMJson(generationPrompt, {
         maxTokens: 4096,
         temperature: 0.7,
         systemPrompt: FILE_AGENT_SYSTEM_PROMPT,
@@ -69,8 +68,9 @@ async function runFileAgent(goalId, content, options = {}, io = null) {
         finalFilename = fileData.filename || filename;
         fileFormat = fileData.format || format;
       }
-    } catch (groqErr) {
-      console.warn('[FILE_AGENT] Groq structuring failed, writing raw content:', groqErr.message);
+    } catch (llmErr) {
+      if (llmErr.code === 'cancelled') throw llmErr;
+      console.warn('[FILE_AGENT] LLM structuring failed, writing raw content:', llmErr.message);
     }
 
     console.log('[FILE_AGENT] Content structured');
@@ -84,7 +84,11 @@ async function runFileAgent(goalId, content, options = {}, io = null) {
       timestamp: new Date().toISOString(),
     };
 
-    const filePath = path.join(uploadsDir, finalFilename);
+    finalFilename = path.basename(String(finalFilename)).replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (!finalFilename || finalFilename === '.' || finalFilename === '..') finalFilename = 'report.md';
+    const goalDir = path.join(uploadsDir, String(goalId).replace(/[^a-zA-Z0-9_-]/g, '_'));
+    fs.mkdirSync(goalDir, { recursive: true });
+    const filePath = path.join(goalDir, finalFilename);
     fs.writeFileSync(filePath, fileContent, 'utf-8');
     const fileSize = fs.statSync(filePath).size;
     await addFile(goalId, finalFilename, filePath, fileFormat, fileSize);
@@ -182,7 +186,7 @@ async function createJsonReport(goalId, data, io = null) {
     const timestamp = new Date().toISOString().split('T')[0];
     const filename = `report_${timestamp}.json`;
 
-    // Write file directly (don't use Groq for JSON)
+    // Write file directly (don't use LLM for JSON)
     const filePath = path.join(uploadsDir, filename);
     fs.writeFileSync(filePath, content, 'utf-8');
 

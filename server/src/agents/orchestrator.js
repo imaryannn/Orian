@@ -4,7 +4,7 @@ const {
   updateTask,
   updateWorkflowStep,
 } = require('../services/stateManager');
-const { callGroqJson } = require('../tools/llm');
+const { callLLMJson } = require('../tools/llm');
 const {
   webAgent,
   fileAgent,
@@ -15,7 +15,7 @@ const {
 const MAX_RETRIES = 3;
 
 async function plannerAgent(workflow) {
-  const plan = await callGroqJson([
+  const plan = await callLLMJson([
     {
       role: 'system',
       content: 'You are ORIAN Planner. Return JSON only with {"tasks":[{"agentType":"web|file|code","instruction":"...","searchQuery":"optional","code":"optional"}]}. ORIAN can search the web, write files, run tiny sandboxed code, and deliver final reports to external tools like Notion/webhooks after synthesis. Keep to 3-5 tasks.',
@@ -62,7 +62,7 @@ async function plannerAgent(workflow) {
 
 async function criticAgent(workflowId, task, rawOutput) {
   try {
-    const review = await callGroqJson([
+    const review = await callLLMJson([
       {
         role: 'system',
         content: 'You are ORIAN Critic. Return JSON only: {"approved":boolean,"score":0-1,"feedback":"short reason"}. Approve useful grounded outputs.',
@@ -175,7 +175,7 @@ async function summarizerAgent(workflow) {
     `Task: ${task.instruction}\nOutput: ${JSON.stringify(task.rawOutput).slice(0, 2000)}`
   )).join('\n\n');
 
-  const summary = await callGroqJson([
+  const summary = await callLLMJson([
     {
       role: 'system',
       content: 'You are ORIAN Summarizer. Return JSON only: {"title":"...","executiveSummary":"...","keyFindings":["..."],"markdown":"..."}',
