@@ -1,2 +1,0 @@
-// task: Set up a basic HTML structure for the calculator, including a text input for the display and buttons for digits and operators
-console.log('task processed');
